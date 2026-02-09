@@ -24,7 +24,6 @@ const weightSweepData = [
 
 const comparisonData = [
   { method: "No QCC", mean: 30.7, std: 3.8 },
-  { method: "QCC v2", mean: 28.8, std: 4.1 },
   { method: "QCC v3", mean: 39.4, std: 4.9 },
 ];
 
@@ -32,7 +31,6 @@ const COLORS = {
   baseline: "#a8a29e",
   best: "#15803d",
   normal: "#1d4ed8",
-  v2: "#b91c1c",
   v3: "#1d4ed8",
   none: "#a8a29e",
 };
@@ -116,10 +114,10 @@ function ComparisonChart() {
   return (
     <div>
       <h4 className="mb-1 text-sm font-medium text-[var(--foreground)]">
-        No QCC vs QCC v2 vs QCC v3
+        Baseline vs QCC v3
       </h4>
       <p className="mb-3 text-xs text-[var(--muted)]">
-        9 trials, 80 epochs. v3 wins 9/9 trials.
+        9 trials, 80 epochs. QCC v3 wins 9/9 trials.
       </p>
       <ResponsiveContainer width="100%" height={260}>
         <BarChart data={comparisonData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
@@ -157,8 +155,6 @@ function ComparisonChart() {
                 fill={
                   entry.method === "QCC v3"
                     ? COLORS.v3
-                    : entry.method === "QCC v2"
-                    ? COLORS.v2
                     : COLORS.none
                 }
               />

@@ -36,6 +36,7 @@ export default function Home() {
           <a href="#cycle" className="shrink-0 hover:text-[var(--foreground)]">3. Cycle</a>
           <a href="#arch" className="shrink-0 hover:text-[var(--foreground)]">4. Architecture</a>
           <a href="#results" className="shrink-0 hover:text-[var(--foreground)]">5. Rotation Results</a>
+          <a href="#artdata" className="shrink-0 hover:text-[var(--foreground)]">5b. Articulated Data</a>
           <a href="#articulated" className="shrink-0 hover:text-[var(--foreground)]">6. Articulated Results</a>
         </div>
       </nav>
@@ -61,13 +62,60 @@ export default function Home() {
         <Section id="data" num="1" title="Rotation-Only Synthetic Dataset">
           <p className="mb-4 text-sm leading-relaxed text-[var(--muted)]">
             8 classes of point cloud sequences where each class differs only in rotation pattern.
-            64 points (32 palm + 32 fingers), 16 frames, Gaussian noise (&sigma;=0.12), 20%
+            64 points (32 palm + 32 fingers), 16 frames, Gaussian noise (&sigma;=0.1), 20%
             point occlusion. Best-case scenario for QCC.
           </p>
           <PointCloudViz />
-          <p className="mt-3 text-xs text-[var(--muted)]">
+          <p className="mt-3 mb-6 text-xs text-[var(--muted)]">
             Gray = palm points, colored = finger points. Each panel animates one rotation pattern.
           </p>
+
+          <details className="rounded border border-[var(--card-border)]">
+            <summary className="cursor-pointer bg-[var(--card)] px-4 py-2 text-sm font-medium">
+              Generation code
+            </summary>
+            <pre className="overflow-x-auto px-4 py-3 font-mono text-xs leading-relaxed text-[var(--muted)]">{`def generate_rotation_dataset(n_samples_per_class=80, n_points=64,
+                               n_frames=16, noise_std=0.1,
+                               occlusion_rate=0.2, device='cuda'):
+    n_classes = 8
+    t = torch.linspace(0, 2 * np.pi, n_frames, device=device)
+
+    patterns = [
+        lambda t: torch.zeros_like(t),                        # 0: Static
+        lambda t: t * 0.3,                                    # 1: Slow +
+        lambda t: t * 1.0,                                    # 2: Fast +
+        lambda t: -t * 0.3,                                   # 3: Slow -
+        lambda t: -t * 1.0,                                   # 4: Fast -
+        lambda t: torch.sin(t * 2) * 0.5,                     # 5: Slow Osc
+        lambda t: torch.sin(t * 4) * 0.25,                    # 6: Fast Osc
+        lambda t: torch.where(t > np.pi,                      # 7: Step
+                    (t - np.pi) * 0.5, torch.zeros_like(t)),
+    ]
+
+    for cls_idx, rot_fn in enumerate(patterns):
+        angles = rot_fn(t)
+        for _ in range(n_samples_per_class):
+            palm = torch.randn(n_points // 2, 3) * 0.1
+            palm[:, 2] = 0
+            fingers = torch.randn(n_points // 2, 3) * 0.05
+            fingers[:, 1] = torch.abs(fingers[:, 1]) + 0.2
+            base = torch.cat([palm, fingers], dim=0)
+
+            traj = torch.stack([torch.cos(t)*0.3,
+                                torch.sin(t)*0.3,
+                                torch.zeros_like(t)], dim=-1)
+
+            for f in range(n_frames):
+                a = angles[f]
+                R = rot_z(a)  # 2D rotation matrix
+                pts = base @ R.T + traj[f]
+                pts += torch.randn_like(pts) * noise_std
+                # 20% occlusion: replace with background noise
+                mask = torch.rand(n_points) > occlusion_rate
+                pts = torch.where(mask[...,None], pts,
+                                  torch.randn(n_points, 3) * 0.3)
+                pts = pts[torch.randperm(n_points)]  # shuffle`}</pre>
+          </details>
         </Section>
 
         {/* 2. QCC v3 */}
@@ -75,24 +123,16 @@ export default function Home() {
           <div className="flex flex-col gap-5">
             <p className="text-sm leading-relaxed text-[var(--muted)]">
               QCC v3 is a self-supervised regularization loss for geometrically consistent
-              rotation representations. Unlike QCC v2 (direct quaternion regression, which
-              hurt classification by &minus;1.3%), v3 uses pure cycle consistency on quaternion
-              compositions.
+              rotation representations. It uses pure cycle consistency on quaternion
+              compositions &mdash; no direct quaternion supervision.
             </p>
 
-            <div className="grid gap-3 text-xs sm:grid-cols-3">
+            <div className="grid gap-3 text-xs sm:grid-cols-2">
               <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-3">
                 <div className="mb-1 font-medium text-[var(--accent)]">Core Idea</div>
                 <p className="leading-relaxed text-[var(--muted)]">
                   Rotate A&rarr;B&rarr;C with predicted quaternions, close the cycle with
                   ground-truth C&rarr;A. The result should be identity. Deviation = cycle error.
-                </p>
-              </div>
-              <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-3">
-                <div className="mb-1 font-medium text-[var(--green)]">vs QCC v2</div>
-                <p className="leading-relaxed text-[var(--muted)]">
-                  v2 directly supervised q_pred = q_SVD, making cycle/velocity losses redundant.
-                  Competed with CE gradients and hurt classification.
                 </p>
               </div>
               <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-3">
@@ -195,6 +235,81 @@ export default function Home() {
             over baseline (30.7% &rarr; 39.4%), winning 9/9 trials.
           </p>
           <ResultsCharts />
+        </Section>
+
+        {/* Articulated dataset generation code (between the two experiment sections) */}
+        <Section id="artdata" num="5b" title="Articulated Synthetic Dataset Design">
+          <p className="mb-4 text-sm leading-relaxed text-[var(--muted)]">
+            A harder dataset with 4 independently moving body regions (palm, thumb, index,
+            other fingers). 8 gesture classes span rotation-heavy, translation-heavy, and
+            articulation-heavy motions. 480 train / 120 test samples, 16 frames &times; 64
+            points &times; 3D.
+          </p>
+
+          <details className="rounded border border-[var(--card-border)]" open>
+            <summary className="cursor-pointer bg-[var(--card)] px-4 py-2 text-sm font-medium">
+              Generation code
+            </summary>
+            <pre className="overflow-x-auto px-4 py-3 font-mono text-xs leading-relaxed text-[var(--muted)]">{`def generate_articulated_dataset(n_samples_per_class=60, n_points=64,
+                                  n_frames=16, noise_std=0.12,
+                                  occlusion_rate=0.2, device='cuda'):
+    n_per_region = n_points // 4   # 16 pts each
+    t_arr = np.linspace(0, 1, n_frames)
+
+    for cls_idx in range(8):
+        for _ in range(n_samples_per_class):
+            # 4 regions: Gaussian clouds at fixed offsets
+            palm   = randn(16,3)*0.08;  palm[:,2]  *= 0.3
+            thumb  = randn(16,3)*0.04;  thumb[:,0] += 0.15; thumb[:,1] += 0.10
+            index  = randn(16,3)*0.03;  index[:,1] += 0.25
+            others = randn(16,3)*0.04;  others[:,0]-= 0.05; others[:,1]+= 0.20
+
+            phase = rand() * 0.3          # random phase offset
+            speed = 0.8 + rand() * 0.4    # speed variation [0.8, 1.2]
+
+            for f in range(n_frames):
+                tf = t_arr[f] * speed + phase
+
+                if cls_idx == 0:   # IDLE: all static
+                    pass
+                elif cls_idx == 1: # SWIPE: translate X
+                    palm[:,0]  += tf * 0.4
+                    thumb[:,0] += tf * 0.4 + tf * 0.03
+                    index[:,0] += tf * 0.4 + tf * 0.02
+                    others[:,0]+= tf * 0.4 - tf * 0.02
+                elif cls_idx == 2: # WAVE: oscillate Z-rotation
+                    angle = sin(tf * 2*pi) * 0.6
+                    R = rot_z(angle)
+                    palm, thumb, index, others = [p @ R.T for p in ...]
+                elif cls_idx == 3: # POINT: thumb/others curl, index extends
+                    thumb = rotate_around_center(thumb, rot_x(tf*1.2))
+                    index = rotate_around_center(index, rot_x(-tf*0.3))
+                    index[:,1] += tf * 0.1
+                    others= rotate_around_center(others, rot_x(tf*1.2))
+                elif cls_idx == 4: # GRAB: palm forward, all fingers curl
+                    palm[:,1] += tf * 0.1
+                    for arr in [thumb, index, others]:
+                        arr = rotate_around_center(arr, rot_x(tf*1.0))
+                elif cls_idx == 5: # PINCH: thumb toward index
+                    thumb[:,0] -= tf*0.1;  thumb[:,1] += tf*0.08
+                    index[:,0] += tf*0.05; index[:,1] -= tf*0.05
+                elif cls_idx == 6: # OPEN: all fingers extend out
+                    palm[:,1] -= tf * 0.08
+                    for arr in [thumb, index, others]:
+                        arr = rotate_around_center(arr, rot_x(-tf*0.8))
+                elif cls_idx == 7: # CIRCLE: circular traj + wrist rotation
+                    R = rot_z(tf * pi)
+                    for arr in [palm, thumb, index, others]:
+                        arr = arr @ R.T
+                        arr[:,0] += cos(tf*2*pi)*0.15
+                        arr[:,1] += sin(tf*2*pi)*0.15
+
+                pts = concatenate([palm, thumb, index, others])
+                pts += randn(64,3) * 0.12     # noise
+                mask = rand(64) > 0.2          # 20% occlusion
+                pts = where(mask, pts, randn(64,3)*0.3)
+                pts = pts[randperm(64)]        # shuffle order`}</pre>
+          </details>
         </Section>
 
         {/* 6. Articulated Results */}
