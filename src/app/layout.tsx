@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "QCC v3 — Quaternion Cycle Consistency Visualizer",
+  title: "QCC v3 Ablation Report",
   description:
-    "Interactive visualization of QCC v3: paper-faithful quaternion cycle consistency for point cloud gesture recognition. From ST-QNet (TPAMI 2025).",
+    "Synthetic ablation experiments for QCC v3 quaternion cycle consistency. ST-QNet (TPAMI 2025).",
 };
 
 export default function RootLayout({

@@ -29,12 +29,12 @@ const comparisonData = [
 ];
 
 const COLORS = {
-  baseline: "#6b7280",
-  best: "#22c55e",
-  normal: "#6366f1",
-  v2: "#ef4444",
-  v3: "#6366f1",
-  none: "#6b7280",
+  baseline: "#a8a29e",
+  best: "#15803d",
+  normal: "#1d4ed8",
+  v2: "#b91c1c",
+  v3: "#1d4ed8",
+  none: "#a8a29e",
 };
 
 function WeightSweepChart() {
@@ -43,56 +43,56 @@ function WeightSweepChart() {
       <h4 className="mb-1 text-sm font-medium text-[var(--foreground)]">
         QCC Weight Sweep
       </h4>
-      <p className="mb-4 text-xs text-[var(--muted)]">
+      <p className="mb-3 text-xs text-[var(--muted)]">
         3 trials, 60 epochs each. Every non-zero weight beats baseline.
       </p>
-      <ResponsiveContainer width="100%" height={280}>
+      <ResponsiveContainer width="100%" height={260}>
         <BarChart data={weightSweepData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
           <XAxis
             dataKey="weight"
-            tick={{ fill: "#a1a1aa", fontSize: 12 }}
+            tick={{ fill: "#78716c", fontSize: 12 }}
             label={{
               value: "QCC weight (\u03BB)",
               position: "insideBottom",
               offset: -2,
-              fill: "#71717a",
+              fill: "#a8a29e",
               fontSize: 11,
             }}
           />
           <YAxis
             domain={[20, 50]}
-            tick={{ fill: "#a1a1aa", fontSize: 12 }}
+            tick={{ fill: "#78716c", fontSize: 12 }}
             label={{
               value: "Accuracy %",
               angle: -90,
               position: "insideLeft",
               offset: 18,
-              fill: "#71717a",
+              fill: "#a8a29e",
               fontSize: 11,
             }}
           />
           <Tooltip
             contentStyle={{
-              background: "#18181b",
-              border: "1px solid #27272a",
-              borderRadius: 8,
+              background: "#fafaf9",
+              border: "1px solid #d6d3d1",
+              borderRadius: 4,
               fontSize: 12,
             }}
             formatter={(value: number) => [`${value.toFixed(1)}%`, "Accuracy"]}
           />
           <ReferenceLine
             y={31.4}
-            stroke="#6b7280"
+            stroke="#a8a29e"
             strokeDasharray="4 4"
             label={{
               value: "baseline",
-              fill: "#6b7280",
+              fill: "#a8a29e",
               fontSize: 10,
               position: "right",
             }}
           />
-          <Bar dataKey="acc" radius={[4, 4, 0, 0]}>
+          <Bar dataKey="acc" radius={[3, 3, 0, 0]}>
             {weightSweepData.map((entry, idx) => (
               <Cell
                 key={idx}
@@ -118,30 +118,30 @@ function ComparisonChart() {
       <h4 className="mb-1 text-sm font-medium text-[var(--foreground)]">
         No QCC vs QCC v2 vs QCC v3
       </h4>
-      <p className="mb-4 text-xs text-[var(--muted)]">
-        Extended validation: 9 trials, 80 epochs. v3 wins 9/9 trials.
+      <p className="mb-3 text-xs text-[var(--muted)]">
+        9 trials, 80 epochs. v3 wins 9/9 trials.
       </p>
-      <ResponsiveContainer width="100%" height={280}>
+      <ResponsiveContainer width="100%" height={260}>
         <BarChart data={comparisonData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-          <XAxis dataKey="method" tick={{ fill: "#a1a1aa", fontSize: 12 }} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
+          <XAxis dataKey="method" tick={{ fill: "#78716c", fontSize: 12 }} />
           <YAxis
             domain={[20, 50]}
-            tick={{ fill: "#a1a1aa", fontSize: 12 }}
+            tick={{ fill: "#78716c", fontSize: 12 }}
             label={{
               value: "Accuracy %",
               angle: -90,
               position: "insideLeft",
               offset: 18,
-              fill: "#71717a",
+              fill: "#a8a29e",
               fontSize: 11,
             }}
           />
           <Tooltip
             contentStyle={{
-              background: "#18181b",
-              border: "1px solid #27272a",
-              borderRadius: 8,
+              background: "#fafaf9",
+              border: "1px solid #d6d3d1",
+              borderRadius: 4,
               fontSize: 12,
             }}
             formatter={(value: number, name: string) => [
@@ -149,10 +149,8 @@ function ComparisonChart() {
               name === "mean" ? "Mean Accuracy" : "Std Dev",
             ]}
           />
-          <Legend
-            wrapperStyle={{ fontSize: 11, color: "#a1a1aa" }}
-          />
-          <Bar dataKey="mean" name="Mean Accuracy" radius={[4, 4, 0, 0]}>
+          <Legend wrapperStyle={{ fontSize: 11, color: "#78716c" }} />
+          <Bar dataKey="mean" name="Mean Accuracy" radius={[3, 3, 0, 0]}>
             {comparisonData.map((entry, idx) => (
               <Cell
                 key={idx}
@@ -206,23 +204,23 @@ function StatsTable() {
 
   return (
     <div>
-      <h4 className="mb-3 text-sm font-medium text-[var(--foreground)]">
+      <h4 className="mb-2 text-sm font-medium text-[var(--foreground)]">
         Key Numbers
       </h4>
-      <div className="overflow-x-auto rounded-lg border border-[var(--card-border)]">
+      <div className="overflow-x-auto rounded border border-[var(--card-border)]">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--card-border)] bg-[var(--card)]">
-              <th className="px-4 py-2 text-left text-xs font-medium text-[var(--muted)]">
+              <th className="px-3 py-2 text-left text-xs font-medium text-[var(--muted)]">
                 Metric
               </th>
-              <th className="px-4 py-2 text-right text-xs font-medium text-[var(--muted)]">
+              <th className="px-3 py-2 text-right text-xs font-medium text-[var(--muted)]">
                 No QCC
               </th>
-              <th className="px-4 py-2 text-right text-xs font-medium text-[var(--accent)]">
+              <th className="px-3 py-2 text-right text-xs font-medium text-[var(--accent)]">
                 QCC v3
               </th>
-              <th className="px-4 py-2 text-right text-xs font-medium text-[var(--muted)]">
+              <th className="px-3 py-2 text-right text-xs font-medium text-[var(--muted)]">
                 Delta
               </th>
             </tr>
@@ -233,14 +231,14 @@ function StatsTable() {
                 key={r.metric}
                 className="border-b border-[var(--card-border)] last:border-0"
               >
-                <td className="px-4 py-2 text-[var(--muted)]">{r.metric}</td>
-                <td className="px-4 py-2 text-right font-mono">{r.none}</td>
-                <td className="px-4 py-2 text-right font-mono text-[var(--accent)]">
+                <td className="px-3 py-1.5 text-[var(--muted)]">{r.metric}</td>
+                <td className="px-3 py-1.5 text-right font-mono">{r.none}</td>
+                <td className="px-3 py-1.5 text-right font-mono text-[var(--accent)]">
                   {r.v3}
                 </td>
                 <td
-                  className={`px-4 py-2 text-right font-mono ${
-                    r.good ? "text-[#22c55e]" : "text-[var(--muted)]"
+                  className={`px-3 py-1.5 text-right font-mono ${
+                    r.good ? "text-[var(--green)]" : "text-[var(--muted)]"
                   }`}
                 >
                   {r.delta}
@@ -256,12 +254,12 @@ function StatsTable() {
 
 export default function ResultsCharts() {
   return (
-    <div className="flex flex-col gap-10">
-      <div className="grid gap-8 lg:grid-cols-2">
-        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card)] p-5">
+    <div className="flex flex-col gap-8">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-4">
           <WeightSweepChart />
         </div>
-        <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card)] p-5">
+        <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-4">
           <ComparisonChart />
         </div>
       </div>

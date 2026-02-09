@@ -12,49 +12,49 @@ const PATTERNS: {
     name: "Static",
     desc: "No rotation",
     fn: () => 0,
-    color: "#6b7280",
+    color: "#78716c",
   },
   {
     name: "Slow +",
     desc: "angle = 0.3t",
     fn: (t) => t * 0.3,
-    color: "#3b82f6",
+    color: "#2563eb",
   },
   {
     name: "Fast +",
     desc: "angle = 1.0t",
     fn: (t) => t * 1.0,
-    color: "#6366f1",
+    color: "#4f46e5",
   },
   {
     name: "Slow -",
     desc: "angle = -0.3t",
     fn: (t) => -t * 0.3,
-    color: "#06b6d4",
+    color: "#0891b2",
   },
   {
     name: "Fast -",
     desc: "angle = -1.0t",
     fn: (t) => -t * 1.0,
-    color: "#8b5cf6",
+    color: "#7c3aed",
   },
   {
     name: "Slow Osc",
     desc: "0.5 sin(2t)",
     fn: (t) => Math.sin(t * 2) * 0.5,
-    color: "#22c55e",
+    color: "#16a34a",
   },
   {
     name: "Fast Osc",
     desc: "0.25 sin(4t)",
     fn: (t) => Math.sin(t * 4) * 0.25,
-    color: "#eab308",
+    color: "#ca8a04",
   },
   {
     name: "Step",
     desc: "kick at t=pi",
     fn: (t) => (t > Math.PI ? (t - Math.PI) * 0.5 : 0),
-    color: "#ef4444",
+    color: "#dc2626",
   },
 ];
 
@@ -108,7 +108,7 @@ function PointCloudCanvas({
     const W = canvas.width;
     const H = canvas.height;
 
-    ctx.fillStyle = "#18181b";
+    ctx.fillStyle = "#fafaf9";
     ctx.fillRect(0, 0, W, H);
 
     const t =
@@ -119,7 +119,7 @@ function PointCloudCanvas({
     const sin = Math.sin(angle);
 
     // Draw trajectory circle (faint)
-    ctx.strokeStyle = "#27272a";
+    ctx.strokeStyle = "#d6d3d1";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(W / 2, H / 2, W * 0.15, 0, Math.PI * 2);
@@ -139,11 +139,10 @@ function PointCloudCanvas({
       const sx = cx + rx * scale;
       const sy = cy - ry * scale;
 
-      const alpha = pt.isPalm ? 0.7 : 1.0;
       const size = pt.isPalm ? 2.5 : 3;
       ctx.fillStyle = pt.isPalm
-        ? `rgba(161,161,170,${alpha})`
-        : `${pattern.color}`;
+        ? "rgba(120,113,108,0.6)"
+        : pattern.color;
       ctx.beginPath();
       ctx.arc(sx, sy, size, 0, Math.PI * 2);
       ctx.fill();
@@ -159,7 +158,7 @@ function PointCloudCanvas({
     ctx.stroke();
 
     // Frame counter
-    ctx.fillStyle = "#52525b";
+    ctx.fillStyle = "#a8a29e";
     ctx.font = "10px monospace";
     ctx.fillText(
       `f${(frameRef.current % N_FRAMES).toString().padStart(2, "0")}`,
@@ -172,7 +171,6 @@ function PointCloudCanvas({
   }, [pattern]);
 
   useEffect(() => {
-    // Stagger start
     const timeout = setTimeout(() => {
       animRef.current = requestAnimationFrame(draw);
     }, index * 80);
@@ -183,12 +181,12 @@ function PointCloudCanvas({
   }, [draw, index]);
 
   return (
-    <div className="flex flex-col items-center gap-2">
+    <div className="flex flex-col items-center gap-1.5">
       <canvas
         ref={canvasRef}
         width={180}
         height={180}
-        className="rounded-lg border border-[var(--card-border)]"
+        className="rounded border border-[var(--card-border)]"
       />
       <div className="text-center">
         <div className="text-sm font-medium" style={{ color: pattern.color }}>
