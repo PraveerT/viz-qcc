@@ -3,6 +3,7 @@ import CycleDiagram from "@/components/CycleDiagram";
 import ResultsCharts from "@/components/ResultsCharts";
 import ArchitectureDiagram from "@/components/ArchitectureDiagram";
 import ArticulatedResults from "@/components/ArticulatedResults";
+import PmambaRealSamples from "@/components/PmambaRealSamples";
 
 function Section({
   id,
@@ -34,6 +35,7 @@ export default function Home() {
           <a href="#data" className="shrink-0 hover:text-[var(--foreground)]">1. Rotation Data</a>
           <a href="#qcc" className="shrink-0 hover:text-[var(--foreground)]">2. QCC v3</a>
           <a href="#cycle" className="shrink-0 hover:text-[var(--foreground)]">3. Cycle</a>
+          <a href="#pmamba" className="shrink-0 hover:text-[var(--foreground)]">3b. PMamba Samples</a>
           <a href="#arch" className="shrink-0 hover:text-[var(--foreground)]">4. Architecture</a>
           <a href="#results" className="shrink-0 hover:text-[var(--foreground)]">5. Rotation Results</a>
           <a href="#artdata" className="shrink-0 hover:text-[var(--foreground)]">5b. Articulated Data</a>
@@ -214,6 +216,15 @@ export default function Home() {
             Three anchor frames are sampled from different thirds of the sequence.
           </p>
           <CycleDiagram />
+        </Section>
+
+        <Section id="pmamba" num="3b" title="Real PMamba Train/Test Clips">
+          <p className="mb-4 text-sm leading-relaxed text-[var(--muted)]">
+            These are actual clips from the PMamba Nvidia processed dataset. Each card
+            compares the original point sequence against the current cycle augmentation
+            path so the point-level effect is visible on real train and test samples.
+          </p>
+          <PmambaRealSamples />
         </Section>
 
         {/* 4. Architecture */}
