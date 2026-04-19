@@ -6,20 +6,35 @@ type Sample = {
   class: string;
   label: number;
   subject: string;
-  mode?: "raw" | "correspondence";
+  mode?: "raw" | "correspondence" | "hungarian";
   held_per_frame?: number[];
   frames: number[][][]; // [T][N][3]
 };
 
-type Mode = "raw" | "correspondence";
+type Mode = "raw" | "correspondence" | "hungarian";
+const MODES: Mode[] = ["raw", "correspondence", "hungarian"];
 const POINT_COUNTS = [128, 512] as const;
 type PointCount = (typeof POINT_COUNTS)[number];
 type Key = `${Mode}-${PointCount}`;
 const SAMPLE_URLS: Record<Key, string> = {
   "raw-128": "/sample_128.json",
   "correspondence-128": "/sample_128_corr.json",
+  "hungarian-128": "/sample_128_hungarian.json",
   "raw-512": "/sample_512.json",
   "correspondence-512": "/sample_512_corr.json",
+  "hungarian-512": "/sample_512_hungarian.json",
+};
+
+const MODE_COLORS: Record<Mode, string> = {
+  raw: "#60a5fa",
+  correspondence: "#f59e0b",
+  hungarian: "#34d399",
+};
+
+const MODE_LABELS: Record<Mode, string> = {
+  raw: "RAW",
+  correspondence: "MUTUAL-NN",
+  hungarian: "HUNGARIAN",
 };
 
 const SPEED_PRESETS = [0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8];
@@ -275,10 +290,10 @@ export default function BigPointCloud() {
         </h1>
         {sample && (
           <p style={{ fontSize: "0.82rem", color: "#64748b", margin: 0 }}>
-            {sample.class} · label {sample.label} · {sample.subject} · {sample.frames.length} frames × {sample.frames[0].length} pts · <span style={{ color: mode === "raw" ? "#60a5fa" : "#f59e0b", fontWeight: 600 }}>{mode}</span>
-            {mode === "correspondence" && sample.held_per_frame && (
+            {sample.class} · label {sample.label} · {sample.subject} · {sample.frames.length} frames × {sample.frames[0].length} pts · <span style={{ color: MODE_COLORS[mode], fontWeight: 600 }}>{MODE_LABELS[mode]}</span>
+            {mode !== "raw" && sample.held_per_frame && (
               <span style={{ marginLeft: 8, color: "#475569" }}>
-                · {sample.held_per_frame.reduce((a, b) => a + b, 0)}/{sample.frames[0].length * (sample.frames.length - 1)} holds
+                · {sample.held_per_frame.reduce((a, b) => a + b, 0)}/{sample.frames[0].length * (sample.frames.length - 1)} holds ({(100 * sample.held_per_frame.reduce((a, b) => a + b, 0) / (sample.frames[0].length * (sample.frames.length - 1))).toFixed(0)}%)
               </span>
             )}
           </p>
@@ -287,11 +302,11 @@ export default function BigPointCloud() {
 
         <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem", flexWrap: "wrap", justifyContent: "center" }}>
           <div style={{ display: "inline-flex", border: "1px solid #334155", borderRadius: 6, overflow: "hidden" }}>
-            {(["raw", "correspondence"] as Mode[]).map((m) => {
+            {MODES.map((m) => {
               const key = `${m}-${nPts}` as Key;
               const active = mode === m;
               const ready = !!samples[key];
-              const color = m === "raw" ? "#60a5fa" : "#f59e0b";
+              const color = MODE_COLORS[m];
               return (
                 <button
                   key={m}
@@ -301,16 +316,15 @@ export default function BigPointCloud() {
                     background: active ? color : "transparent",
                     color: active ? "#0b1220" : ready ? color : "#475569",
                     border: "none",
-                    padding: "0.45rem 1.1rem",
-                    fontSize: "0.8rem",
+                    padding: "0.45rem 1rem",
+                    fontSize: "0.75rem",
                     fontWeight: 700,
                     cursor: ready ? "pointer" : "not-allowed",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
+                    letterSpacing: "0.04em",
                     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
                   }}
                 >
-                  {m}
+                  {MODE_LABELS[m]}
                 </button>
               );
             })}
