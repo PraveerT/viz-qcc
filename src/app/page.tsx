@@ -40,6 +40,14 @@ export default function Home() {
           <a href="#results" className="shrink-0 hover:text-[var(--foreground)]">5. Rotation Results</a>
           <a href="#artdata" className="shrink-0 hover:text-[var(--foreground)]">5b. Articulated Data</a>
           <a href="#articulated" className="shrink-0 hover:text-[var(--foreground)]">6. Articulated Results</a>
+          <a
+            href="/big"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto shrink-0 rounded border border-[var(--accent)] px-2 py-0.5 font-semibold text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white"
+          >
+            Big Viz ↗
+          </a>
         </div>
       </nav>
 
@@ -68,9 +76,19 @@ export default function Home() {
             point occlusion. Best-case scenario for QCC.
           </p>
           <PointCloudViz />
-          <p className="mt-3 mb-6 text-xs text-[var(--muted)]">
+          <p className="mt-3 mb-3 text-xs text-[var(--muted)]">
             Gray = palm points, colored = finger points. Each panel animates one rotation pattern.
           </p>
+          <div className="mb-6">
+            <a
+              href="/big"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded border border-[var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+            >
+              Open 128-point sample in new tab ↗
+            </a>
+          </div>
 
           <details className="rounded border border-[var(--card-border)]">
             <summary className="cursor-pointer bg-[var(--card)] px-4 py-2 text-sm font-medium">
