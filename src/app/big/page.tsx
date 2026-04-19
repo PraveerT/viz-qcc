@@ -28,6 +28,9 @@ export default function BigPointCloud() {
   const animRef = useRef<number>(0);
   const yawRef = useRef(0);
   const speedRef = useRef(1);
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  const dragRef = useRef<{ startX: number; startY: number; px: number; py: number } | null>(null);
 
   const [samples, setSamples] = useState<Partial<Record<Mode, Sample>>>({});
   const [mode, setMode] = useState<Mode>("raw");
@@ -83,9 +86,10 @@ export default function BigPointCloud() {
     const cy = Math.cos(y), sy = Math.sin(y);
     const cp = Math.cos(pitch), sp = Math.sin(pitch);
 
-    const scale = Math.min(W, H) * 0.42;
-    const ox = W / 2;
-    const oy = H / 2;
+    const baseScale = Math.min(W, H) * 0.42;
+    const scale = baseScale * zoomRef.current;
+    const ox = W / 2 + panRef.current.x;
+    const oy = H / 2 + panRef.current.y;
 
     const projected: { sx: number; sy: number; depth: number; idx: number }[] = [];
     for (let i = 0; i < pts.length; i++) {
@@ -135,15 +139,16 @@ export default function BigPointCloud() {
     ctx.strokeStyle = "rgba(148,163,184,0.2)";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(W / 2, H / 2, scale * 1.05, 0, Math.PI * 2);
+    ctx.arc(ox, oy, baseScale * 1.05, 0, Math.PI * 2);
     ctx.stroke();
 
     ctx.fillStyle = "rgba(148,163,184,0.9)";
     ctx.font = "14px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText(`frame ${fi.toString().padStart(2, "0")} / ${T - 1}`, 20, H - 62);
-    ctx.fillText(`N = ${N_POINTS} sampled from 512`, 20, H - 40);
-    ctx.fillText(`speed ${speedRef.current.toFixed(2)}x`, 20, H - 18);
-    ctx.fillText(`yaw ${yawRef.current.toFixed(2)}  pitch ${pitch.toFixed(2)}`, W - 240, H - 18);
+    ctx.fillText(`frame ${fi.toString().padStart(2, "0")} / ${T - 1}`, 20, H - 82);
+    ctx.fillText(`N = ${N_POINTS} sampled from 512`, 20, H - 60);
+    ctx.fillText(`speed ${speedRef.current.toFixed(2)}x`, 20, H - 38);
+    ctx.fillText(`zoom ${zoomRef.current.toFixed(2)}x`, 20, H - 16);
+    ctx.fillText(`yaw ${yawRef.current.toFixed(2)}  pitch ${pitch.toFixed(2)}`, W - 240, H - 16);
 
     if (autoSpin) yawRef.current += 0.012 * Math.max(0.25, speedRef.current);
     if (fi !== frameIdx) setFrameIdx(fi);
@@ -175,6 +180,68 @@ export default function BigPointCloud() {
   useEffect(() => {
     yawRef.current = yaw;
   }, [yaw]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left - rect.width / 2 - panRef.current.x;
+      const my = e.clientY - rect.top - rect.height / 2 - panRef.current.y;
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      const nextZoom = Math.min(8, Math.max(0.3, zoomRef.current * factor));
+      const effective = nextZoom / zoomRef.current;
+      panRef.current = {
+        x: panRef.current.x - mx * (effective - 1),
+        y: panRef.current.y - my * (effective - 1),
+      };
+      zoomRef.current = nextZoom;
+    };
+
+    const onDown = (e: MouseEvent) => {
+      dragRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        px: panRef.current.x,
+        py: panRef.current.y,
+      };
+      canvas.style.cursor = "grabbing";
+    };
+    const onMove = (e: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      panRef.current = {
+        x: d.px + (e.clientX - d.startX),
+        y: d.py + (e.clientY - d.startY),
+      };
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      canvas.style.cursor = "grab";
+    };
+
+    canvas.style.cursor = "grab";
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    canvas.addEventListener("mousedown", onDown);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
+  const resetView = useCallback(() => {
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
+    yawRef.current = 0;
+    setYaw(0);
+    setPitch(0.25);
+  }, []);
 
   return (
     <div
@@ -245,8 +312,11 @@ export default function BigPointCloud() {
 
       <canvas
         ref={canvasRef}
-        style={{ borderRadius: 12, border: "1px solid #1e293b", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}
+        style={{ borderRadius: 12, border: "1px solid #1e293b", boxShadow: "0 20px 60px rgba(0,0,0,0.4)", touchAction: "none" }}
       />
+      <p style={{ fontSize: "0.72rem", color: "#475569", margin: "-0.5rem 0 0" }}>
+        scroll to zoom · drag to pan · reset restores view
+      </p>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "center", justifyContent: "center", maxWidth: 820 }}>
         <button
@@ -266,6 +336,9 @@ export default function BigPointCloud() {
           style={btn(showIds ? "#0891b2" : "#1e293b")}
         >
           {showIds ? "hide ids" : "show ids"}
+        </button>
+        <button onClick={resetView} style={btn("#1e293b")}>
+          reset view
         </button>
         <label style={labelStyle}>
           id size
