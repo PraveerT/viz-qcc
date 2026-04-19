@@ -29,6 +29,8 @@ export default function BigPointCloud() {
   const [pitch, setPitch] = useState(0.25);
   const [frameIdx, setFrameIdx] = useState(0);
   const [speed, setSpeed] = useState(1);
+  const [showIds, setShowIds] = useState(true);
+  const [idFontPx, setIdFontPx] = useState(9);
 
   useEffect(() => {
     speedRef.current = speed;
@@ -73,8 +75,9 @@ export default function BigPointCloud() {
     const ox = W / 2;
     const oy = H / 2;
 
-    const projected: { sx: number; sy: number; depth: number }[] = [];
-    for (const p of pts) {
+    const projected: { sx: number; sy: number; depth: number; idx: number }[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
       const x = p[0], py = p[1], pz = p[2];
       const x1 = x * cy + pz * sy;
       const z1 = -x * sy + pz * cy;
@@ -84,6 +87,7 @@ export default function BigPointCloud() {
         sx: ox + x1 * scale,
         sy: oy - y1 * scale,
         depth: z2,
+        idx: i,
       });
     }
 
@@ -105,6 +109,17 @@ export default function BigPointCloud() {
       ctx.fill();
     }
 
+    if (showIds) {
+      ctx.font = `${idFontPx}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.textBaseline = "middle";
+      for (const p of projected) {
+        const t01 = (p.depth - dmin) / drange;
+        const size = 3 + (1 - t01) * 4;
+        ctx.fillStyle = `rgba(226, 232, 240, ${0.55 + (1 - t01) * 0.4})`;
+        ctx.fillText(p.idx.toString(), p.sx + size + 1.5, p.sy);
+      }
+    }
+
     ctx.strokeStyle = "rgba(148,163,184,0.2)";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -121,7 +136,7 @@ export default function BigPointCloud() {
     if (autoSpin) yawRef.current += 0.012 * Math.max(0.25, speedRef.current);
     if (fi !== frameIdx) setFrameIdx(fi);
     animRef.current = requestAnimationFrame(draw);
-  }, [sample, playing, autoSpin, pitch, frameIdx]);
+  }, [sample, playing, autoSpin, pitch, frameIdx, showIds, idFontPx]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -201,6 +216,27 @@ export default function BigPointCloud() {
         >
           {autoSpin ? "stop spin" : "auto spin"}
         </button>
+        <button
+          onClick={() => setShowIds((v) => !v)}
+          style={btn(showIds ? "#0891b2" : "#1e293b")}
+        >
+          {showIds ? "hide ids" : "show ids"}
+        </button>
+        <label style={labelStyle}>
+          id size
+          <input
+            type="range"
+            min={7}
+            max={18}
+            step={1}
+            value={idFontPx}
+            onChange={(e) => setIdFontPx(parseInt(e.target.value))}
+            style={{ width: 100 }}
+          />
+          <span style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.78rem" }}>
+            {idFontPx}px
+          </span>
+        </label>
 
         <label style={labelStyle}>
           yaw
