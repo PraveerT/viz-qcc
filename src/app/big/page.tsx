@@ -11,11 +11,15 @@ type Sample = {
 
 const N_POINTS = 128;
 
+const SPEED_PRESETS = [0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8];
+
 export default function BigPointCloud() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const frameRef = useRef(0);
+  const frameAccumRef = useRef(0);
+  const lastTsRef = useRef<number | null>(null);
   const animRef = useRef<number>(0);
   const yawRef = useRef(0);
+  const speedRef = useRef(1);
 
   const [sample, setSample] = useState<Sample | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -24,6 +28,11 @@ export default function BigPointCloud() {
   const [yaw, setYaw] = useState(0);
   const [pitch, setPitch] = useState(0.25);
   const [frameIdx, setFrameIdx] = useState(0);
+  const [speed, setSpeed] = useState(1);
+
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
 
   useEffect(() => {
     fetch("/sample_128.json")
@@ -32,7 +41,7 @@ export default function BigPointCloud() {
       .catch((e) => setErr(String(e)));
   }, []);
 
-  const draw = useCallback(() => {
+  const draw = useCallback((ts?: number) => {
     const canvas = canvasRef.current;
     if (!canvas || !sample) return;
     const ctx = canvas.getContext("2d");
@@ -45,7 +54,15 @@ export default function BigPointCloud() {
     ctx.fillRect(0, 0, W, H);
 
     const T = sample.frames.length;
-    const fi = frameRef.current % T;
+    const BASE_FPS = 30;
+    const now = ts ?? performance.now();
+    const last = lastTsRef.current ?? now;
+    const dt = Math.min(0.1, (now - last) / 1000);
+    lastTsRef.current = now;
+    if (playing) {
+      frameAccumRef.current = (frameAccumRef.current + dt * BASE_FPS * speedRef.current) % T;
+    }
+    const fi = Math.floor(((frameAccumRef.current % T) + T) % T);
     const pts = sample.frames[fi];
 
     const y = yawRef.current;
@@ -96,17 +113,15 @@ export default function BigPointCloud() {
 
     ctx.fillStyle = "rgba(148,163,184,0.9)";
     ctx.font = "14px ui-monospace, SFMono-Regular, Menlo, monospace";
-    ctx.fillText(`frame ${fi.toString().padStart(2, "0")} / ${T - 1}`, 20, H - 42);
-    ctx.fillText(`N = ${N_POINTS} sampled from 512`, 20, H - 20);
-    ctx.fillText(`yaw ${yawRef.current.toFixed(2)}  pitch ${pitch.toFixed(2)}`, W - 240, H - 20);
+    ctx.fillText(`frame ${fi.toString().padStart(2, "0")} / ${T - 1}`, 20, H - 62);
+    ctx.fillText(`N = ${N_POINTS} sampled from 512`, 20, H - 40);
+    ctx.fillText(`speed ${speedRef.current.toFixed(2)}x`, 20, H - 18);
+    ctx.fillText(`yaw ${yawRef.current.toFixed(2)}  pitch ${pitch.toFixed(2)}`, W - 240, H - 18);
 
-    if (autoSpin) yawRef.current += 0.012;
-    if (playing) {
-      frameRef.current = (frameRef.current + 1) % T;
-      setFrameIdx(frameRef.current);
-    }
+    if (autoSpin) yawRef.current += 0.012 * Math.max(0.25, speedRef.current);
+    if (fi !== frameIdx) setFrameIdx(fi);
     animRef.current = requestAnimationFrame(draw);
-  }, [sample, playing, autoSpin, pitch]);
+  }, [sample, playing, autoSpin, pitch, frameIdx]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -215,6 +230,42 @@ export default function BigPointCloud() {
           />
         </label>
         <label style={labelStyle}>
+          speed
+          <input
+            type="range"
+            min={0.05}
+            max={8}
+            step={0.05}
+            value={speed}
+            onChange={(e) => setSpeed(parseFloat(e.target.value))}
+            style={{ width: 160 }}
+          />
+          <span style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.78rem", minWidth: 44, textAlign: "right" }}>
+            {speed.toFixed(2)}x
+          </span>
+        </label>
+        <div style={{ display: "inline-flex", gap: "0.25rem" }}>
+          {SPEED_PRESETS.map((s) => (
+            <button
+              key={s}
+              onClick={() => setSpeed(s)}
+              style={{
+                background: Math.abs(speed - s) < 1e-3 ? "#2563eb" : "transparent",
+                color: Math.abs(speed - s) < 1e-3 ? "#fff" : "#93c5fd",
+                border: "1px solid #2563eb",
+                padding: "0.3rem 0.55rem",
+                borderRadius: 4,
+                fontSize: "0.72rem",
+                fontFamily: "ui-monospace, monospace",
+                cursor: "pointer",
+              }}
+            >
+              {s}x
+            </button>
+          ))}
+        </div>
+
+        <label style={labelStyle}>
           frame
           <input
             type="range"
@@ -224,7 +275,7 @@ export default function BigPointCloud() {
             value={frameIdx}
             onChange={(e) => {
               const v = parseInt(e.target.value);
-              frameRef.current = v;
+              frameAccumRef.current = v;
               setFrameIdx(v);
               setPlaying(false);
             }}
