@@ -6,7 +6,15 @@ type Sample = {
   class: string;
   label: number;
   subject: string;
+  mode?: "raw" | "correspondence";
+  held_per_frame?: number[];
   frames: number[][][]; // [T][N][3]
+};
+
+type Mode = "raw" | "correspondence";
+const SAMPLE_URLS: Record<Mode, string> = {
+  raw: "/sample_128.json",
+  correspondence: "/sample_128_corr.json",
 };
 
 const N_POINTS = 128;
@@ -21,7 +29,9 @@ export default function BigPointCloud() {
   const yawRef = useRef(0);
   const speedRef = useRef(1);
 
-  const [sample, setSample] = useState<Sample | null>(null);
+  const [samples, setSamples] = useState<Partial<Record<Mode, Sample>>>({});
+  const [mode, setMode] = useState<Mode>("raw");
+  const sample = samples[mode] ?? null;
   const [err, setErr] = useState<string | null>(null);
   const [playing, setPlaying] = useState(true);
   const [autoSpin, setAutoSpin] = useState(true);
@@ -37,10 +47,12 @@ export default function BigPointCloud() {
   }, [speed]);
 
   useEffect(() => {
-    fetch("/sample_128.json")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${r.status}`))))
-      .then((j: Sample) => setSample(j))
-      .catch((e) => setErr(String(e)));
+    (Object.keys(SAMPLE_URLS) as Mode[]).forEach((m) => {
+      fetch(SAMPLE_URLS[m])
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${m}: ${r.status}`))))
+        .then((j: Sample) => setSamples((s) => ({ ...s, [m]: j })))
+        .catch((e) => setErr(String(e)));
+    });
   }, []);
 
   const draw = useCallback((ts?: number) => {
@@ -192,10 +204,43 @@ export default function BigPointCloud() {
         </h1>
         {sample && (
           <p style={{ fontSize: "0.82rem", color: "#64748b", margin: 0 }}>
-            {sample.class} · label {sample.label} · {sample.subject} · 32 frames × 128 pts
+            {sample.class} · label {sample.label} · {sample.subject} · 32 frames × 128 pts · <span style={{ color: mode === "raw" ? "#60a5fa" : "#f59e0b", fontWeight: 600 }}>{mode}</span>
+            {mode === "correspondence" && sample.held_per_frame && (
+              <span style={{ marginLeft: 8, color: "#475569" }}>
+                · {sample.held_per_frame.reduce((a, b) => a + b, 0)}/{128 * (sample.frames.length - 1)} holds
+              </span>
+            )}
           </p>
         )}
         {err && <p style={{ color: "#f87171", fontSize: "0.85rem" }}>Failed to load sample: {err}</p>}
+
+        <div style={{ display: "inline-flex", marginTop: "0.5rem", border: "1px solid #334155", borderRadius: 6, overflow: "hidden" }}>
+          {(Object.keys(SAMPLE_URLS) as Mode[]).map((m) => {
+            const active = mode === m;
+            const color = m === "raw" ? "#60a5fa" : "#f59e0b";
+            return (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                disabled={!samples[m]}
+                style={{
+                  background: active ? color : "transparent",
+                  color: active ? "#0b1220" : samples[m] ? color : "#475569",
+                  border: "none",
+                  padding: "0.45rem 1.1rem",
+                  fontSize: "0.8rem",
+                  fontWeight: 700,
+                  cursor: samples[m] ? "pointer" : "not-allowed",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.06em",
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                }}
+              >
+                {m}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <canvas
