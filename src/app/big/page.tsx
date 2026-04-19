@@ -12,12 +12,15 @@ type Sample = {
 };
 
 type Mode = "raw" | "correspondence";
-const SAMPLE_URLS: Record<Mode, string> = {
-  raw: "/sample_128.json",
-  correspondence: "/sample_128_corr.json",
+const POINT_COUNTS = [128, 512] as const;
+type PointCount = (typeof POINT_COUNTS)[number];
+type Key = `${Mode}-${PointCount}`;
+const SAMPLE_URLS: Record<Key, string> = {
+  "raw-128": "/sample_128.json",
+  "correspondence-128": "/sample_128_corr.json",
+  "raw-512": "/sample_512.json",
+  "correspondence-512": "/sample_512_corr.json",
 };
-
-const N_POINTS = 128;
 
 const SPEED_PRESETS = [0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8];
 
@@ -32,9 +35,10 @@ export default function BigPointCloud() {
   const panRef = useRef({ x: 0, y: 0 });
   const dragRef = useRef<{ startX: number; startY: number; px: number; py: number } | null>(null);
 
-  const [samples, setSamples] = useState<Partial<Record<Mode, Sample>>>({});
+  const [samples, setSamples] = useState<Partial<Record<Key, Sample>>>({});
   const [mode, setMode] = useState<Mode>("raw");
-  const sample = samples[mode] ?? null;
+  const [nPts, setNPts] = useState<PointCount>(128);
+  const sample = samples[`${mode}-${nPts}` as Key] ?? null;
   const [err, setErr] = useState<string | null>(null);
   const [playing, setPlaying] = useState(true);
   const [autoSpin, setAutoSpin] = useState(true);
@@ -50,10 +54,10 @@ export default function BigPointCloud() {
   }, [speed]);
 
   useEffect(() => {
-    (Object.keys(SAMPLE_URLS) as Mode[]).forEach((m) => {
-      fetch(SAMPLE_URLS[m])
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${m}: ${r.status}`))))
-        .then((j: Sample) => setSamples((s) => ({ ...s, [m]: j })))
+    (Object.keys(SAMPLE_URLS) as Key[]).forEach((k) => {
+      fetch(SAMPLE_URLS[k])
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`${k}: ${r.status}`))))
+        .then((j: Sample) => setSamples((s) => ({ ...s, [k]: j })))
         .catch((e) => setErr(String(e)));
     });
   }, []);
@@ -145,7 +149,7 @@ export default function BigPointCloud() {
     ctx.fillStyle = "rgba(148,163,184,0.9)";
     ctx.font = "14px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.fillText(`frame ${fi.toString().padStart(2, "0")} / ${T - 1}`, 20, H - 82);
-    ctx.fillText(`N = ${N_POINTS} sampled from 512`, 20, H - 60);
+    ctx.fillText(nPts === 512 ? `N = 512 (all points)` : `N = 128 sampled from 512`, 20, H - 60);
     ctx.fillText(`speed ${speedRef.current.toFixed(2)}x`, 20, H - 38);
     ctx.fillText(`zoom ${zoomRef.current.toFixed(2)}x`, 20, H - 16);
     ctx.fillText(`yaw ${yawRef.current.toFixed(2)}  pitch ${pitch.toFixed(2)}`, W - 240, H - 16);
@@ -153,7 +157,7 @@ export default function BigPointCloud() {
     if (autoSpin) yawRef.current += 0.012 * Math.max(0.25, speedRef.current);
     if (fi !== frameIdx) setFrameIdx(fi);
     animRef.current = requestAnimationFrame(draw);
-  }, [sample, playing, autoSpin, pitch, frameIdx, showIds, idFontPx]);
+  }, [sample, playing, autoSpin, pitch, frameIdx, showIds, idFontPx, nPts]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -271,42 +275,73 @@ export default function BigPointCloud() {
         </h1>
         {sample && (
           <p style={{ fontSize: "0.82rem", color: "#64748b", margin: 0 }}>
-            {sample.class} · label {sample.label} · {sample.subject} · 32 frames × 128 pts · <span style={{ color: mode === "raw" ? "#60a5fa" : "#f59e0b", fontWeight: 600 }}>{mode}</span>
+            {sample.class} · label {sample.label} · {sample.subject} · {sample.frames.length} frames × {sample.frames[0].length} pts · <span style={{ color: mode === "raw" ? "#60a5fa" : "#f59e0b", fontWeight: 600 }}>{mode}</span>
             {mode === "correspondence" && sample.held_per_frame && (
               <span style={{ marginLeft: 8, color: "#475569" }}>
-                · {sample.held_per_frame.reduce((a, b) => a + b, 0)}/{128 * (sample.frames.length - 1)} holds
+                · {sample.held_per_frame.reduce((a, b) => a + b, 0)}/{sample.frames[0].length * (sample.frames.length - 1)} holds
               </span>
             )}
           </p>
         )}
         {err && <p style={{ color: "#f87171", fontSize: "0.85rem" }}>Failed to load sample: {err}</p>}
 
-        <div style={{ display: "inline-flex", marginTop: "0.5rem", border: "1px solid #334155", borderRadius: 6, overflow: "hidden" }}>
-          {(Object.keys(SAMPLE_URLS) as Mode[]).map((m) => {
-            const active = mode === m;
-            const color = m === "raw" ? "#60a5fa" : "#f59e0b";
-            return (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                disabled={!samples[m]}
-                style={{
-                  background: active ? color : "transparent",
-                  color: active ? "#0b1220" : samples[m] ? color : "#475569",
-                  border: "none",
-                  padding: "0.45rem 1.1rem",
-                  fontSize: "0.8rem",
-                  fontWeight: 700,
-                  cursor: samples[m] ? "pointer" : "not-allowed",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                }}
-              >
-                {m}
-              </button>
-            );
-          })}
+        <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem", flexWrap: "wrap", justifyContent: "center" }}>
+          <div style={{ display: "inline-flex", border: "1px solid #334155", borderRadius: 6, overflow: "hidden" }}>
+            {(["raw", "correspondence"] as Mode[]).map((m) => {
+              const key = `${m}-${nPts}` as Key;
+              const active = mode === m;
+              const ready = !!samples[key];
+              const color = m === "raw" ? "#60a5fa" : "#f59e0b";
+              return (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  disabled={!ready}
+                  style={{
+                    background: active ? color : "transparent",
+                    color: active ? "#0b1220" : ready ? color : "#475569",
+                    border: "none",
+                    padding: "0.45rem 1.1rem",
+                    fontSize: "0.8rem",
+                    fontWeight: 700,
+                    cursor: ready ? "pointer" : "not-allowed",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  }}
+                >
+                  {m}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "inline-flex", border: "1px solid #334155", borderRadius: 6, overflow: "hidden" }}>
+            {POINT_COUNTS.map((n) => {
+              const key = `${mode}-${n}` as Key;
+              const active = nPts === n;
+              const ready = !!samples[key];
+              return (
+                <button
+                  key={n}
+                  onClick={() => setNPts(n)}
+                  disabled={!ready}
+                  style={{
+                    background: active ? "#22d3ee" : "transparent",
+                    color: active ? "#0b1220" : ready ? "#22d3ee" : "#475569",
+                    border: "none",
+                    padding: "0.45rem 1rem",
+                    fontSize: "0.8rem",
+                    fontWeight: 700,
+                    cursor: ready ? "pointer" : "not-allowed",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  }}
+                >
+                  {n} pts
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
