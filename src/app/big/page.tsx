@@ -82,7 +82,8 @@ export default function BigPointCloud() {
   const speedRef = useRef(1);
   const zoomRef = useRef(1);
   const panRef = useRef({ x: 0, y: 0 });
-  const dragRef = useRef<{ startX: number; startY: number; px: number; py: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; px: number; py: number; mode: "pan" | "probe"; probeStart?: { x: number; y: number; z: number } } | null>(null);
+  const probeRef = useRef<{ x: number; y: number; z: number; active: boolean }>({ x: 0, y: 0, z: 0, active: false });
 
   const [samples, setSamples] = useState<Partial<Record<Key, Sample>>>({});
   const [mode, setMode] = useState<Mode>("raw");
@@ -99,6 +100,8 @@ export default function BigPointCloud() {
   const [idFontPx, setIdFontPx] = useState(9);
   const [showTops, setShowTops] = useState(false);
   const [showPoints, setShowPoints] = useState(true);
+  const [probeActive, setProbeActive] = useState(false);
+  const [probePos, setProbePos] = useState<{ x: number; y: number; z: number }>({ x: 0, y: 0, z: 0 });
 
   useEffect(() => {
     speedRef.current = speed;
@@ -183,10 +186,15 @@ export default function BigPointCloud() {
     }
 
     if (showTops) {
-      // Compute per-frame centroid.
+      // Compute per-frame centroid (optionally including the probe).
       let cxs = 0, cys = 0, czs = 0;
-      for (const pt of pts) { cxs += pt[0]; cys += pt[1]; czs += pt[2]; }
-      cxs /= pts.length; cys /= pts.length; czs /= pts.length;
+      let cCount = 0;
+      for (const pt of pts) { cxs += pt[0]; cys += pt[1]; czs += pt[2]; cCount++; }
+      if (probeRef.current.active) {
+        cxs += probeRef.current.x; cys += probeRef.current.y; czs += probeRef.current.z;
+        cCount++;
+      }
+      cxs /= cCount; cys /= cCount; czs /= cCount;
 
       const tripodLen = 0.06;  // in normalized world units
       ctx.lineWidth = 1.2;
@@ -240,6 +248,61 @@ export default function BigPointCloud() {
       }
     }
 
+    if (probeRef.current.active) {
+      const px0 = probeRef.current.x, py0 = probeRef.current.y, pz0 = probeRef.current.z;
+      const x1p = px0 * cy + pz0 * sy;
+      const z1p = -px0 * sy + pz0 * cy;
+      const y1p = py0 * cp - z1p * sp;
+      const sxP = ox + x1p * scale;
+      const syP = oy - y1p * scale;
+
+      if (showTops) {
+        // Compute probe's own quaternion from centroid (using the same centroid as tops field).
+        let cxs2 = 0, cys2 = 0, czs2 = 0;
+        let cCount2 = 0;
+        for (const pt of pts) { cxs2 += pt[0]; cys2 += pt[1]; czs2 += pt[2]; cCount2++; }
+        cxs2 += px0; cys2 += py0; czs2 += pz0; cCount2++;
+        cxs2 /= cCount2; cys2 /= cCount2; czs2 /= cCount2;
+        const dxw = px0 - cxs2, dyw = py0 - cys2, dzw = pz0 - czs2;
+        const nm = Math.sqrt(dxw * dxw + dyw * dyw + dzw * dzw) || 1e-6;
+        const q = quatFromNorth(dxw / nm, dyw / nm, dzw / nm);
+        const tripodLen2 = 0.12;  // probe tripod bigger for visibility
+        const axes: [number[], string][] = [
+          [quatRotate(q, 1, 0, 0), "#f87171"],
+          [quatRotate(q, 0, 1, 0), "#34d399"],
+          [quatRotate(q, 0, 0, 1), "#60a5fa"],
+        ];
+        ctx.lineWidth = 2.4;
+        for (const [v, color] of axes) {
+          const tx = px0 + v[0] * tripodLen2;
+          const ty = py0 + v[1] * tripodLen2;
+          const tz = pz0 + v[2] * tripodLen2;
+          const x1b = tx * cy + tz * sy;
+          const z1b = -tx * sy + tz * cy;
+          const y1b = ty * cp - z1b * sp;
+          const sxB = ox + x1b * scale;
+          const syB = oy - y1b * scale;
+          ctx.strokeStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(sxP, syP);
+          ctx.lineTo(sxB, syB);
+          ctx.stroke();
+        }
+        ctx.lineWidth = 1.2;
+      }
+      // Probe marker (always visible when active): yellow ring + dot.
+      ctx.strokeStyle = "#fbbf24";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(sxP, syP, 10, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#fbbf24";
+      ctx.beginPath();
+      ctx.arc(sxP, syP, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 1;
+    }
+
     if (showIds && showPoints) {
       ctx.font = `${idFontPx}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       ctx.textBaseline = "middle";
@@ -268,7 +331,7 @@ export default function BigPointCloud() {
     if (autoSpin) yawRef.current += 0.012 * Math.max(0.25, speedRef.current);
     if (fi !== frameIdx) setFrameIdx(fi);
     animRef.current = requestAnimationFrame(draw);
-  }, [sample, playing, autoSpin, pitch, frameIdx, showIds, idFontPx, nPts, showTops, showPoints]);
+  }, [sample, playing, autoSpin, pitch, frameIdx, showIds, idFontPx, nPts, showTops, showPoints, probeActive, probePos]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -297,6 +360,13 @@ export default function BigPointCloud() {
   }, [yaw]);
 
   useEffect(() => {
+    probeRef.current.active = probeActive;
+    probeRef.current.x = probePos.x;
+    probeRef.current.y = probePos.y;
+    probeRef.current.z = probePos.z;
+  }, [probeActive, probePos]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -316,21 +386,47 @@ export default function BigPointCloud() {
     };
 
     const onDown = (e: MouseEvent) => {
+      const isProbe = e.shiftKey && probeRef.current.active;
       dragRef.current = {
         startX: e.clientX,
         startY: e.clientY,
         px: panRef.current.x,
         py: panRef.current.y,
+        mode: isProbe ? "probe" : "pan",
+        probeStart: isProbe
+          ? { x: probeRef.current.x, y: probeRef.current.y, z: probeRef.current.z }
+          : undefined,
       };
-      canvas.style.cursor = "grabbing";
+      canvas.style.cursor = isProbe ? "crosshair" : "grabbing";
     };
     const onMove = (e: MouseEvent) => {
       const d = dragRef.current;
       if (!d) return;
-      panRef.current = {
-        x: d.px + (e.clientX - d.startX),
-        y: d.py + (e.clientY - d.startY),
-      };
+      if (d.mode === "pan") {
+        panRef.current = {
+          x: d.px + (e.clientX - d.startX),
+          y: d.py + (e.clientY - d.startY),
+        };
+      } else if (d.mode === "probe" && d.probeStart) {
+        const rect = canvas.getBoundingClientRect();
+        const baseScale = Math.min(rect.width, rect.height) * 0.42;
+        const sc = baseScale * zoomRef.current;
+        const dsx = e.clientX - d.startX;
+        const dsy = e.clientY - d.startY;
+        const yawC = Math.cos(yawRef.current);
+        const yawS = Math.sin(yawRef.current);
+        // Screen-x delta -> camera-right world vector: (cos(yaw), 0, sin(yaw))
+        const dwx = (dsx / sc) * yawC;
+        const dwz = (dsx / sc) * yawS;
+        const dwy = -dsy / sc;
+        probeRef.current = {
+          ...probeRef.current,
+          x: d.probeStart.x + dwx,
+          y: d.probeStart.y + dwy,
+          z: d.probeStart.z + dwz,
+        };
+        setProbePos({ x: probeRef.current.x, y: probeRef.current.y, z: probeRef.current.z });
+      }
     };
     const onUp = () => {
       dragRef.current = null;
@@ -494,6 +590,20 @@ export default function BigPointCloud() {
         >
           {showPoints ? "hide points" : "show points"}
         </button>
+        <button
+          onClick={() => setProbeActive((v) => !v)}
+          style={btn(probeActive ? "#fbbf24" : "#1e293b")}
+        >
+          {probeActive ? "probe on (shift+drag)" : "add probe"}
+        </button>
+        {probeActive && (
+          <button
+            onClick={() => setProbePos({ x: 0, y: 0, z: 0 })}
+            style={btn("#1e293b")}
+          >
+            probe→origin
+          </button>
+        )}
         <button onClick={resetView} style={btn("#1e293b")}>
           reset view
         </button>
