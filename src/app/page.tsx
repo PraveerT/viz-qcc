@@ -923,6 +923,82 @@ function QuatBandChart({
   );
 }
 
+/** Row per point, shows summary; click to expand full 5-quat detail. */
+function RealPointRow({
+  label,
+  accent,
+  transDeg,
+  quats,
+  labels,
+}: {
+  label: string;
+  accent: string;
+  transDeg: number;
+  quats: Quat[];        // 5 entries
+  labels: string[];     // 5 entries
+}) {
+  const [open, setOpen] = useState(false);
+  const errOk = transDeg < 2;
+  return (
+    <div className="rounded border border-[var(--card-border)]">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex w-full items-center gap-2 px-1.5 py-0.5 text-left hover:bg-[var(--card)]"
+      >
+        <div style={{ color: accent }} className="w-12 font-mono text-[10px] font-semibold">
+          {label}
+        </div>
+        <div
+          className={`rounded px-1 py-0.5 font-mono text-[10px] ${
+            errOk ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
+          }`}
+        >
+          ∠{transDeg.toFixed(2)}°
+        </div>
+        {/* Mini 5-quat xyz bars inline */}
+        <svg viewBox="0 0 200 14" preserveAspectRatio="none" className="h-3 flex-1">
+          {quats.map((q, i) => {
+            const x = (i / 5) * 200;
+            const cw = 200 / 5 - 2;
+            const mid = x + cw / 2;
+            const bh = 4;
+            const scale = (v: number) => Math.max(-1, Math.min(1, v / 0.35));
+            return (
+              <g key={i}>
+                <line x1={x} y1={7} x2={x + cw} y2={7} stroke="#f0efed" strokeWidth={0.4} />
+                <line x1={mid} y1={1} x2={mid} y2={13} stroke="#e7e5e4" strokeWidth={0.4} />
+                {[q[1], q[2], q[3]].map((val, j) => {
+                  const colors = ["#ef4444", "#22c55e", "#3b82f6"];
+                  const w = scale(val) * (cw / 2);
+                  const yy = 2 + j * bh;
+                  return (
+                    <rect key={j}
+                      x={w >= 0 ? mid : mid + w}
+                      y={yy}
+                      width={Math.max(0.5, Math.abs(w))}
+                      height={bh - 1}
+                      fill={colors[j]}
+                      opacity={0.85}
+                    />
+                  );
+                })}
+              </g>
+            );
+          })}
+        </svg>
+        <span className="text-[10px] text-[var(--muted)]">{open ? "−" : "+"}</span>
+      </button>
+      {open && (
+        <div className="border-t border-[var(--card-border)] px-1 py-1">
+          {quats.map((q, i) => (
+            <QuatRow key={labels[i]} tag={labels[i]} q={q} accent={accent} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RealSampleCard({
   classId,
   frames,
@@ -1068,13 +1144,39 @@ function RealSampleCard({
           <QuatAxisLegend />
         </div>
 
-        {/* Mean quaternion bar-rows (analogous to synthetic per-point rows) */}
-        {labels.map((lab, i) => (
-          <QuatRow key={lab} tag={lab} q={meanQuats[i]} accent="#78716c" />
-        ))}
+        {/* Mean quaternion bar-rows */}
+        <div className="mb-2">
+          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide">mean over all points</div>
+          {labels.map((lab, i) => (
+            <QuatRow key={lab} tag={lab} q={meanQuats[i]} accent="#78716c" />
+          ))}
+        </div>
 
-        <div className="mt-1">
+        <div className="mb-2">
+          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide">distribution (mean ± std)</div>
           <QuatBandChart labels={labels} quatsPerPoint={quatsPerPoint} />
+        </div>
+
+        <div>
+          <div className="mb-0.5 flex items-center gap-2 text-[10px]">
+            <span className="font-semibold uppercase tracking-wide">per-point</span>
+            <span className="text-[10px]">(click row to expand)</span>
+          </div>
+          <div className="max-h-[480px] space-y-0.5 overflow-y-auto pr-1">
+            {qfA.map((_, idx) => {
+              const pointQuats = [qfA[idx], qb[idx], qfB[idx], qfDirect[idx], qfComposed[idx]];
+              return (
+                <RealPointRow
+                  key={idx}
+                  label={`p${idx + 1}`}
+                  accent={idx % 2 === 0 ? "#1f2937" : "#0f172a"}
+                  transDeg={transDeg[idx]}
+                  quats={pointQuats}
+                  labels={labels}
+                />
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -1189,35 +1291,7 @@ export default function Home() {
 
       <main className="mx-auto max-w-5xl px-3 py-4 sm:px-5">
         {view === "real" ? (
-          <section>
-            {realError && (
-              <div className="mb-3 rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700">
-                Failed to load hungarian_samples.json: {realError}
-              </div>
-            )}
-            {!realData ? (
-              <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-4 text-sm text-[var(--muted)]">
-                Loading real Hungarian samples…
-              </div>
-            ) : (
-              <>
-                <div className="mb-3 flex items-center gap-3 text-xs text-[var(--muted)]">
-                  <span>25 classes · P={realData.P} · T={realData.T}</span>
-                  <span>one test sample per class, correspondence-aligned via Hungarian</span>
-                </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {realData.classes.map(c => (
-                    <RealSampleCard
-                      key={c.classId}
-                      classId={c.classId}
-                      frames={c.frames as V3[][]}
-                      frameIndex={frameIndex}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
-          </section>
+          <RealView realData={realData} realError={realError} frameIndex={frameIndex} />
         ) : (
           <SynthView
             N={N} setN={setN}
@@ -1231,6 +1305,61 @@ export default function Home() {
         )}
       </main>
     </div>
+  );
+}
+
+function RealView({
+  realData,
+  realError,
+  frameIndex,
+}: {
+  realData: RealData | null;
+  realError: string | null;
+  frameIndex: number;
+}) {
+  const [selectedClass, setSelectedClass] = useState(0);
+  if (realError) {
+    return (
+      <div className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700">
+        Failed to load hungarian_samples.json: {realError}
+      </div>
+    );
+  }
+  if (!realData) {
+    return (
+      <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-4 text-sm text-[var(--muted)]">
+        Loading real Hungarian samples…
+      </div>
+    );
+  }
+  const classes = realData.classes;
+  const cur = classes[selectedClass];
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-3 text-xs text-[var(--muted)]">
+        <span>{classes.length} classes · P={realData.P} · T={realData.T}</span>
+        <span>one test sample per class, Hungarian correspondence-aligned</span>
+      </div>
+      {/* Class pill selector */}
+      <div className="mb-3 -mx-3 overflow-x-auto px-3 sm:mx-0 sm:px-0">
+        <div className="flex gap-1">
+          {classes.map((c, i) => (
+            <button
+              key={c.classId}
+              onClick={() => setSelectedClass(i)}
+              className={`shrink-0 rounded px-2 py-1 font-mono text-[11px] ${
+                i === selectedClass
+                  ? "bg-[var(--foreground)] text-[var(--background)]"
+                  : "border border-[var(--card-border)] hover:bg-[var(--card)]"
+              }`}
+            >
+              c{String(c.classId + 1).padStart(2, "0")}
+            </button>
+          ))}
+        </div>
+      </div>
+      <RealSampleCard classId={cur.classId} frames={cur.frames as V3[][]} frameIndex={frameIndex} />
+    </section>
   );
 }
 
