@@ -4,6 +4,7 @@ import ResultsCharts from "@/components/ResultsCharts";
 import ArchitectureDiagram from "@/components/ArchitectureDiagram";
 import ArticulatedResults from "@/components/ArticulatedResults";
 import PmambaRealSamples from "@/components/PmambaRealSamples";
+import SyntheticRotationViz from "@/components/SyntheticRotationViz";
 
 function Section({
   id,
@@ -40,6 +41,7 @@ export default function Home() {
           <a href="#results" className="shrink-0 hover:text-[var(--foreground)]">5. Rotation Results</a>
           <a href="#artdata" className="shrink-0 hover:text-[var(--foreground)]">5b. Articulated Data</a>
           <a href="#articulated" className="shrink-0 hover:text-[var(--foreground)]">6. Articulated Results</a>
+          <a href="#synth3" className="shrink-0 hover:text-[var(--foreground)]">7. Synthetic 3-pt</a>
           <a
             href="/big"
             target="_blank"
@@ -350,6 +352,17 @@ export default function Home() {
             winning 3/3 trials.
           </p>
           <ArticulatedResults />
+        </Section>
+
+        {/* 7. Synthetic 3-pt rotation */}
+        <Section id="synth3" num="7" title="Synthetic 3-point rotation samples">
+          <p className="mb-4 text-sm leading-relaxed text-[var(--muted)]">
+            Minimal diagnostic: a 3-point cloud (red/green/blue triangle) over 128 frames.
+            Rigid samples rotate as a single rigid body about x, y, or z axis. Deform
+            samples apply the same rigid rotation and then add an independent random-walk
+            translation per point, breaking rigidity.
+          </p>
+          <SyntheticRotationViz />
         </Section>
 
         {/* Footer */}
