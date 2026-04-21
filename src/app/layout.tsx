@@ -13,9 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "QCC v3 Ablation Report",
-  description:
-    "Synthetic ablation experiments for QCC v3 quaternion cycle consistency. ST-QNet (TPAMI 2025).",
+  title: "QCC Synth — 3-point cycle consistency",
+  description: "Live synthetic 3-point quaternion cycle-consistency playground.",
 };
 
 export default function RootLayout({

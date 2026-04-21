@@ -1,0 +1,13 @@
+
+> viz-qcc@0.1.0 dev
+> next dev
+
+[1m[38;2;173;127;168m▲ Next.js 16.1.6[39m[22m (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://10.37.52.215:3000
+
+[32m[1m✓[22m[39m Starting...
+[32m[1m✓[22m[39m Ready in 7.9s
+[37m[1m○[22m[39m Compiling / ...
+ GET / [32m200[39m in 6.2s[2m (compile: 5.8s, render: 369ms)[22m
+[?25h
