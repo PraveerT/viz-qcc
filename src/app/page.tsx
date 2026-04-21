@@ -42,6 +42,7 @@ export default function Home() {
           <a href="#artdata" className="shrink-0 hover:text-[var(--foreground)]">5b. Articulated Data</a>
           <a href="#articulated" className="shrink-0 hover:text-[var(--foreground)]">6. Articulated Results</a>
           <a href="#synth3" className="shrink-0 hover:text-[var(--foreground)]">7. Synthetic 3-pt</a>
+          <a href="/qcc-synth" target="_blank" rel="noopener noreferrer" className="shrink-0 rounded border border-[var(--accent)] px-2 py-0.5 font-semibold text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white">QCC Lab ↗</a>
           <a
             href="/big"
             target="_blank"
@@ -363,6 +364,16 @@ export default function Home() {
             translation per point, breaking rigidity.
           </p>
           <SyntheticRotationViz />
+          <div className="mt-4">
+            <a
+              href="/qcc-synth"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded border border-[var(--accent)] bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90"
+            >
+              Open QCC calculation playground ↗
+            </a>
+          </div>
         </Section>
 
         {/* Footer */}
