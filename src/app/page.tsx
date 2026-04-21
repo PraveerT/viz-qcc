@@ -148,6 +148,22 @@ function quatAngleDeg(q: Quat): number {
   return (2 * Math.acos(w) * 180) / Math.PI;
 }
 
+/** Rotate a 3D vector by a unit quaternion. */
+function quatRotate(q: Quat, v: V3): V3 {
+  const [w, x, y, z] = q;
+  const c1x = y * v[2] - z * v[1];
+  const c1y = z * v[0] - x * v[2];
+  const c1z = x * v[1] - y * v[0];
+  const c2x = y * c1z - z * c1y;
+  const c2y = z * c1x - x * c1z;
+  const c2z = x * c1y - y * c1x;
+  return [
+    v[0] + 2 * (w * c1x + c2x),
+    v[1] + 2 * (w * c1y + c2y),
+    v[2] + 2 * (w * c1z + c2z),
+  ];
+}
+
 /** Shortest-arc unit quaternion rotating v1 to v2. */
 function quatFromVectors(v1: V3, v2: V3): Quat {
   const u1 = normalize(v1);
@@ -162,6 +178,52 @@ function quatFromVectors(v1: V3, v2: V3): Quat {
   }
   const axis = cross(u1, u2);
   return quatNorm([w, axis[0], axis[1], axis[2]]);
+}
+
+/** Horn's quaternion Kabsch. Works for any N ≥ 3.
+ *  Returns unit quaternion rotating centered P onto centered Q. */
+function kabschQuat(P: V3[], Q: V3[]): Quat {
+  const cP = centroid(P);
+  const cQ = centroid(Q);
+  // Cross-covariance S (3x3)
+  const S = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  for (let k = 0; k < P.length; k++) {
+    const px = P[k][0] - cP[0], py = P[k][1] - cP[1], pz = P[k][2] - cP[2];
+    const qx = Q[k][0] - cQ[0], qy = Q[k][1] - cQ[1], qz = Q[k][2] - cQ[2];
+    S[0][0] += px * qx; S[0][1] += px * qy; S[0][2] += px * qz;
+    S[1][0] += py * qx; S[1][1] += py * qy; S[1][2] += py * qz;
+    S[2][0] += pz * qx; S[2][1] += pz * qy; S[2][2] += pz * qz;
+  }
+  const Sxx = S[0][0], Sxy = S[0][1], Sxz = S[0][2];
+  const Syx = S[1][0], Syy = S[1][1], Syz = S[1][2];
+  const Szx = S[2][0], Szy = S[2][1], Szz = S[2][2];
+  const N: number[][] = [
+    [Sxx + Syy + Szz, Syz - Szy,         Szx - Sxz,         Sxy - Syx],
+    [Syz - Szy,       Sxx - Syy - Szz,   Sxy + Syx,         Szx + Sxz],
+    [Szx - Sxz,       Sxy + Syx,        -Sxx + Syy - Szz,   Syz + Szy],
+    [Sxy - Syx,       Szx + Sxz,         Syz + Szy,        -Sxx - Syy + Szz],
+  ];
+  // Power iteration for dominant eigenvector of a 4x4 symmetric matrix.
+  // Use a shifted matrix to prefer the positive-eigenvalue side.
+  const SHIFT = Math.max(Math.abs(Sxx), Math.abs(Syy), Math.abs(Szz)) * 4 + 1;
+  let v = [1, 0.01, 0.01, 0.01];
+  for (let iter = 0; iter < 60; iter++) {
+    const u = [
+      (N[0][0] + SHIFT) * v[0] + N[0][1] * v[1] + N[0][2] * v[2] + N[0][3] * v[3],
+      N[1][0] * v[0] + (N[1][1] + SHIFT) * v[1] + N[1][2] * v[2] + N[1][3] * v[3],
+      N[2][0] * v[0] + N[2][1] * v[1] + (N[2][2] + SHIFT) * v[2] + N[2][3] * v[3],
+      N[3][0] * v[0] + N[3][1] * v[1] + N[3][2] * v[2] + (N[3][3] + SHIFT) * v[3],
+    ];
+    const n = Math.hypot(u[0], u[1], u[2], u[3]);
+    if (n < 1e-12) break;
+    v = [u[0] / n, u[1] / n, u[2] / n, u[3] / n];
+  }
+  // v is [w, x, y, z]
+  return quatNorm([v[0], v[1], v[2], v[3]]);
 }
 
 /** Kabsch for 3 points. Returns rotation matrix (row-major) and mean residual. */
@@ -359,8 +421,8 @@ function QuatLineChart({
   );
 }
 
-/** One quaternion row: label + numeric + horizontal xyz bars.
- *  Bars are normalized to a fixed max (0.35 ≈ 40°) so rows are comparable. */
+/** One quaternion row: label + horizontal xyz bars on first line, full numeric
+ *  values on the second line so nothing gets truncated. */
 function QuatRow({ tag, q, accent }: { tag: string; q: Quat; accent: string }) {
   const BAR_MAX = 0.35;
   const axes = [
@@ -369,28 +431,25 @@ function QuatRow({ tag, q, accent }: { tag: string; q: Quat; accent: string }) {
     { v: q[3], color: "#3b82f6" }, // z — blue
   ];
   return (
-    <div className="grid grid-cols-[70px_1fr_88px] items-center gap-1 py-[1px] text-[10px]">
-      <div style={{ color: accent }} className="truncate font-semibold">{tag}</div>
-      <svg viewBox="-100 -12 200 24" preserveAspectRatio="none" className="h-[18px] w-full">
-        <line x1={-100} y1={0} x2={100} y2={0} stroke="#e7e5e4" strokeWidth={0.4} />
-        <line x1={0} y1={-12} x2={0} y2={12} stroke="#d6d3d1" strokeWidth={0.6} />
-        {axes.map((a, i) => {
-          const w = Math.max(-100, Math.min(100, (a.v / BAR_MAX) * 100));
-          const y = -9 + i * 6;
-          return (
-            <rect
-              key={i}
-              x={Math.min(0, w)}
-              y={y}
-              width={Math.abs(w)}
-              height={4}
-              fill={a.color}
-              opacity={0.9}
-            />
-          );
-        })}
-      </svg>
-      <div className="truncate font-mono text-[9.5px] text-[var(--muted)]">{fmtQuat(q)}</div>
+    <div className="py-[2px] text-[11px]">
+      <div className="grid grid-cols-[90px_1fr] items-center gap-1.5">
+        <div style={{ color: accent }} className="truncate font-semibold">{tag}</div>
+        <svg viewBox="-100 -12 200 24" preserveAspectRatio="none" className="h-[18px] w-full">
+          <line x1={-100} y1={0} x2={100} y2={0} stroke="#e7e5e4" strokeWidth={0.4} />
+          <line x1={0} y1={-12} x2={0} y2={12} stroke="#d6d3d1" strokeWidth={0.6} />
+          {axes.map((a, i) => {
+            const w = Math.max(-100, Math.min(100, (a.v / BAR_MAX) * 100));
+            const y = -9 + i * 6;
+            return (
+              <rect key={i} x={Math.min(0, w)} y={y} width={Math.abs(w)} height={4}
+                fill={a.color} opacity={0.9} />
+            );
+          })}
+        </svg>
+      </div>
+      <div className="ml-[90px] font-mono text-[10.5px] text-[var(--muted)] whitespace-nowrap overflow-x-auto">
+        {fmtQuat(q)}
+      </div>
     </div>
   );
 }
@@ -534,6 +593,19 @@ function SampleCard({
   );
   const qb = useMemo(() => qfA.map(quatConj), [qfA]);              // qb_a'a
 
+  // Global best-fit rotation (Kabsch over all 3 points) for step f -> fn.
+  const qBestStep = useMemo(() => kabschQuat(frames[f], frames[fn]), [frames, f, fn]);
+
+  // Per-point rigidity residuals: a' - (q_best · (a - c) + c')
+  const rigidity = useMemo(() => {
+    const cP = centroid(frames[f]);
+    const cQ = centroid(frames[fn]);
+    return frames[f].map((p, i) => {
+      const pred = add(quatRotate(qBestStep, sub(p, cP)), cQ);
+      return sub(frames[fn][i], pred);
+    });
+  }, [frames, f, fn, qBestStep]);
+
   const angleStr = stats.cycleAngleDeg.toFixed(2);
   const resStr = stats.meanResidual.toExponential(1);
   const angleOk = stats.cycleAngleDeg < 1;
@@ -569,21 +641,46 @@ function SampleCard({
           const p2 = lab + "''";
           const err = transErrDeg[i];
           const errOk = err < 1;
+          const idA: Quat = quatNorm(quatMul(qfA[i], qb[i]));                        // q × q^* = id
+          const idB: Quat = quatNorm(quatMul(qfB[i], quatConj(qfB[i])));             // same for step B
+          const qbDirect: Quat = quatConj(qfDirect[i]);
+          const idD: Quat = quatNorm(quatMul(qfDirect[i], qbDirect));
+          const qBestQa: Quat = quatNorm(quatMul(qBestStep, qfA[i]));                 // q_best × qf_aa'
           const rows: { tag: string; q: Quat }[] = [
-            { tag: `qf_${lab}${p1}`,  q: qfA[i] },
-            { tag: `qb_${p1}${lab}`,  q: qb[i] },
-            { tag: `qf_${p1}${p2}`,   q: qfB[i] },
-            { tag: `qf_${lab}${p2}`,  q: qfDirect[i] },
-            { tag: `qfB∘qfA`,         q: qfComposed[i] },
+            { tag: `qf_${lab}${p1}`,             q: qfA[i] },
+            { tag: `qb_${p1}${lab}`,             q: qb[i] },
+            { tag: `qf${lab}${p1}·qb${p1}${lab}`, q: idA },
+            { tag: `qf_${p1}${p2}`,              q: qfB[i] },
+            { tag: `qb_${p2}${p1}`,              q: quatConj(qfB[i]) },
+            { tag: `qf${p1}${p2}·qb${p2}${p1}`,  q: idB },
+            { tag: `qf_${lab}${p2}`,             q: qfDirect[i] },
+            { tag: `qb_${p2}${lab}`,             q: qbDirect },
+            { tag: `qf${lab}${p2}·qb${p2}${lab}`, q: idD },
+            { tag: `qfB∘qfA`,                    q: qfComposed[i] },
+            { tag: `q_best(→')`,                 q: qBestStep },
+            { tag: `q_best·qf_${lab}${p1}`,      q: qBestQa },
           ];
           const chartLabels = [
             `qf_${lab}${p1}`,
             `qb_${p1}${lab}`,
+            `qf${lab}${p1}·qb`,
             `qf_${p1}${p2}`,
+            `qb_${p2}${p1}`,
+            `qf${p1}${p2}·qb`,
             `qf_${lab}${p2}`,
+            `qb_${p2}${lab}`,
+            `qf${lab}${p2}·qb`,
             `qfB∘qfA`,
+            `q_best`,
+            `q_best·qf`,
           ];
-          const chartQuats = [qfA[i], qb[i], qfB[i], qfDirect[i], qfComposed[i]];
+          const chartQuats = [
+            qfA[i], qb[i], idA,
+            qfB[i], quatConj(qfB[i]), idB,
+            qfDirect[i], qbDirect, idD,
+            qfComposed[i],
+            qBestStep, qBestQa,
+          ];
           return (
             <div key={lab} className="mb-1 rounded border border-[var(--card-border)] px-1 py-0.5">
               {rows.map(r => (
@@ -605,6 +702,31 @@ function SampleCard({
         })}
       </div>
 
+      {/* Rigidity residuals vs global q_best */}
+      <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-2">
+        <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-[var(--muted)]">
+          <span>rigidity residuals</span>
+          <QuatAxisLegend />
+        </div>
+        <div className="mb-1">
+          <QuatRow tag="q_best(all)" q={qBestStep} accent="#78716c" />
+        </div>
+        <div className="space-y-0.5">
+          {POINT_LABELS.map((lab, i) => (
+            <RigidityRow
+              key={lab}
+              label={`‖res_${lab}‖`}
+              accent={COLORS[i]}
+              residual={rigidity[i]}
+              max={0.15}
+            />
+          ))}
+        </div>
+        <div className="mt-1 text-[9.5px] text-[var(--muted)]">
+          residual<sub>i</sub> = p<sub>i</sub>&apos; − (q_best·(p<sub>i</sub>−c) + c&apos;); rigid ⇒ ‖·‖ ≈ 0
+        </div>
+      </div>
+
       <div className="font-mono text-[10px] text-[var(--muted)]">
         mean resid {resStr}
       </div>
@@ -623,15 +745,7 @@ function quatFromAxisAngleDeg(axis: V3, deg: number): Quat {
 }
 
 function quatRotateVec(q: Quat, v: V3): V3 {
-  const [w, x, y, z] = q;
-  // v' = q * v * q^-1 expanded
-  const c1x = y * v[2] - z * v[1];
-  const c1y = z * v[0] - x * v[2];
-  const c1z = x * v[1] - y * v[0];
-  const c2x = y * c1z - z * c1y;
-  const c2y = z * c1x - x * c1z;
-  const c2z = x * c1y - y * c1x;
-  return [v[0] + 2 * (w * c1x + c2x), v[1] + 2 * (w * c1y + c2y), v[2] + 2 * (w * c1z + c2z)];
+  return quatRotate(q, v);
 }
 
 function SmallAngleDemo() {
@@ -923,6 +1037,53 @@ function QuatBandChart({
   );
 }
 
+/** Compact residual row: label + xyz bars of residual vector + scalar magnitude. */
+function RigidityRow({
+  label,
+  accent,
+  residual,
+  max = 0.15,
+}: {
+  label: string;
+  accent: string;
+  residual: V3;
+  max?: number;
+}) {
+  const mag = Math.hypot(residual[0], residual[1], residual[2]);
+  const ok = mag < max * 0.5;
+  const axes = [
+    { v: residual[0], color: "#ef4444" },
+    { v: residual[1], color: "#22c55e" },
+    { v: residual[2], color: "#3b82f6" },
+  ];
+  return (
+    <div className="py-[2px] text-[11px]">
+      <div className="grid grid-cols-[90px_1fr_64px] items-center gap-1.5">
+        <div style={{ color: accent }} className="truncate font-semibold">{label}</div>
+        <svg viewBox="-100 -12 200 24" preserveAspectRatio="none" className="h-[18px] w-full">
+          <line x1={-100} y1={0} x2={100} y2={0} stroke="#e7e5e4" strokeWidth={0.4} />
+          <line x1={0} y1={-12} x2={0} y2={12} stroke="#d6d3d1" strokeWidth={0.6} />
+          {axes.map((a, i) => {
+            const w = Math.max(-100, Math.min(100, (a.v / max) * 100));
+            const y = -9 + i * 6;
+            return (
+              <rect key={i} x={Math.min(0, w)} y={y} width={Math.abs(w)} height={4}
+                fill={a.color} opacity={0.9} />
+            );
+          })}
+        </svg>
+        <div
+          className={`rounded px-1 py-0.5 text-right font-mono text-[10px] ${
+            ok ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
+          }`}
+        >
+          {mag.toFixed(3)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Row per point, shows summary; click to expand full 5-quat detail. */
 function RealPointRow({
   label,
@@ -955,11 +1116,12 @@ function RealPointRow({
         >
           ∠{transDeg.toFixed(2)}°
         </div>
-        {/* Mini 5-quat xyz bars inline */}
+        {/* Mini per-quat xyz bars inline (n = quats.length) */}
         <svg viewBox="0 0 200 14" preserveAspectRatio="none" className="h-3 flex-1">
           {quats.map((q, i) => {
-            const x = (i / 5) * 200;
-            const cw = 200 / 5 - 2;
+            const n = quats.length;
+            const x = (i / n) * 200;
+            const cw = 200 / n - 1;
             const mid = x + cw / 2;
             const bh = 4;
             const scale = (v: number) => Math.max(-1, Math.min(1, v / 0.35));
@@ -1114,9 +1276,57 @@ function RealSampleCard({
   );
   const transStats = useMemo(() => statsBand(transDeg), [transDeg]);
 
-  const labels = ["qf_aa'", "qb_a'a", "qf_a'a''", "qf_aa''", "qfB∘qfA"];
-  const quatsPerPoint: Quat[][] = [qfA, qb, qfB, qfDirect, qfComposed];
-  const meanQuats: Quat[] = [qfAmean, qbMean, qfBmean, qfDmean, qfComposedMean];
+  // Identity-check products: qf · qb = (1,0,0,0) by construction.
+  const idA = useMemo(() => qfA.map((q, i) => quatNorm(quatMul(q, qb[i]))), [qfA, qb]);
+  const qbB = useMemo(() => qfB.map(quatConj), [qfB]);
+  const idB = useMemo(() => qfB.map((q, i) => quatNorm(quatMul(q, qbB[i]))), [qfB, qbB]);
+  const qbDirect = useMemo(() => qfDirect.map(quatConj), [qfDirect]);
+  const idD = useMemo(
+    () => qfDirect.map((q, i) => quatNorm(quatMul(q, qbDirect[i]))),
+    [qfDirect, qbDirect]
+  );
+  // Global best-fit rotation over all P points (Kabsch f -> fn), and per-point compose.
+  const qBestStep = useMemo(() => kabschQuat(frames[f], frames[fn]), [frames, f, fn]);
+  const qBestQa = useMemo(
+    () => qfA.map(q => quatNorm(quatMul(qBestStep, q))),
+    [qBestStep, qfA]
+  );
+  const qBestBroadcast: Quat[] = useMemo(() => qfA.map(() => qBestStep), [qfA, qBestStep]);
+
+  // Per-point rigidity residuals against global q_best.
+  const rigidity = useMemo(() => {
+    const cP = centroid(frames[f]);
+    const cQ = centroid(frames[fn]);
+    return frames[f].map((p, i) => {
+      const pred = add(quatRotate(qBestStep, sub(p, cP)), cQ);
+      return sub(frames[fn][i], pred);
+    });
+  }, [frames, f, fn, qBestStep]);
+  const rigidityMags = useMemo(() => rigidity.map(r => Math.hypot(r[0], r[1], r[2])), [rigidity]);
+  const rigidityStats = useMemo(() => statsBand(rigidityMags), [rigidityMags]);
+
+  const labels = [
+    "qf_aa'", "qb_a'a", "qfaa'·qba'a",
+    "qf_a'a''", "qb_a''a'", "qfa'a''·qba''a'",
+    "qf_aa''", "qb_a''a", "qfaa''·qba''a",
+    "qfB∘qfA",
+    "q_best(→')", "q_best·qfaa'",
+  ];
+  const quatsPerPoint: Quat[][] = [
+    qfA, qb, idA,
+    qfB, qbB, idB,
+    qfDirect, qbDirect, idD,
+    qfComposed,
+    qBestBroadcast, qBestQa,
+  ];
+  const meanId: Quat = [1, 0, 0, 0];
+  const meanQuats: Quat[] = [
+    qfAmean, qbMean, meanId,
+    qfBmean, quatConj(qfBmean), meanId,
+    qfDmean, quatConj(qfDmean), meanId,
+    qfComposedMean,
+    qBestStep, quatNorm(quatMul(qBestStep, qfAmean)),
+  ];
 
   return (
     <div className="flex flex-col gap-2 rounded border border-[var(--card-border)] bg-[var(--card)] p-2.5">
@@ -1159,12 +1369,18 @@ function RealSampleCard({
 
         <div>
           <div className="mb-0.5 flex items-center gap-2 text-[10px]">
-            <span className="font-semibold uppercase tracking-wide">per-point</span>
+            <span className="font-semibold uppercase tracking-wide">per-point quaternions</span>
             <span className="text-[10px]">(click row to expand)</span>
           </div>
-          <div className="max-h-[480px] space-y-0.5 overflow-y-auto pr-1">
+          <div className="max-h-[320px] space-y-0.5 overflow-y-auto pr-1">
             {qfA.map((_, idx) => {
-              const pointQuats = [qfA[idx], qb[idx], qfB[idx], qfDirect[idx], qfComposed[idx]];
+              const pointQuats = [
+                qfA[idx], qb[idx], idA[idx],
+                qfB[idx], qbB[idx], idB[idx],
+                qfDirect[idx], qbDirect[idx], idD[idx],
+                qfComposed[idx],
+                qBestStep, qBestQa[idx],
+              ];
               return (
                 <RealPointRow
                   key={idx}
@@ -1176,6 +1392,33 @@ function RealSampleCard({
                 />
               );
             })}
+          </div>
+        </div>
+
+        {/* Rigidity residuals */}
+        <div className="mt-3 rounded border border-[var(--card-border)] bg-[var(--card)] p-2">
+          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-[var(--muted)]">
+            <span>
+              rigidity residuals · μ {rigidityStats.mean.toFixed(3)} ±{(rigidityStats.hi - rigidityStats.mean).toFixed(3)}
+            </span>
+            <QuatAxisLegend />
+          </div>
+          <div className="mb-1">
+            <QuatRow tag="q_best(all)" q={qBestStep} accent="#78716c" />
+          </div>
+          <div className="max-h-[320px] space-y-0.5 overflow-y-auto pr-1">
+            {rigidity.map((r, idx) => (
+              <RigidityRow
+                key={idx}
+                label={`‖res_p${idx + 1}‖`}
+                accent={idx % 2 === 0 ? "#1f2937" : "#0f172a"}
+                residual={r}
+                max={0.15}
+              />
+            ))}
+          </div>
+          <div className="mt-1 text-[9.5px] text-[var(--muted)]">
+            residual<sub>i</sub> = p<sub>i</sub>&apos; − (q_best·(p<sub>i</sub>−c) + c&apos;); rigid ⇒ ‖·‖ ≈ 0
           </div>
         </div>
       </div>
