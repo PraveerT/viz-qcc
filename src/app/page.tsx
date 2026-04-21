@@ -256,6 +256,145 @@ function fmtQuat(q: Quat): string {
 
 /* -------- components -------- */
 
+function QuatAxisLegend() {
+  return (
+    <span className="flex items-center gap-1 text-[9px] normal-case tracking-normal">
+      <span style={{ color: "#ef4444" }}>x</span>
+      <span style={{ color: "#22c55e" }}>y</span>
+      <span style={{ color: "#3b82f6" }}>z</span>
+    </span>
+  );
+}
+
+/** Grouped line-chart: X axis = quat labels, three lines (x, y, z) tracking
+ *  the component values across the 5 quaternions for one point.
+ *  One chart per point (a/b/c) in a card. */
+function QuatLineChart({
+  pointLabel,
+  accent,
+  labels,
+  quats,
+  max = 0.35,
+}: {
+  pointLabel: string;
+  accent: string;
+  labels: string[];
+  quats: Quat[];
+  max?: number;
+}) {
+  const W = 220;
+  const H = 110;
+  const PAD_L = 28;
+  const PAD_R = 8;
+  const PAD_T = 8;
+  const PAD_B = 22;
+  const innerW = W - PAD_L - PAD_R;
+  const innerH = H - PAD_T - PAD_B;
+  const n = quats.length;
+  const xAt = (i: number) => PAD_L + (n === 1 ? innerW / 2 : (innerW * i) / (n - 1));
+  const yAt = (v: number) => PAD_T + innerH / 2 - (Math.max(-max, Math.min(max, v)) / max) * (innerH / 2);
+
+  const series = [
+    { key: "x", color: "#ef4444", vals: quats.map(q => q[1]) },
+    { key: "y", color: "#22c55e", vals: quats.map(q => q[2]) },
+    { key: "z", color: "#3b82f6", vals: quats.map(q => q[3]) },
+  ];
+
+  // Y-axis ticks at -max, -max/2, 0, +max/2, +max
+  const ticks = [-max, -max / 2, 0, max / 2, max];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="w-full">
+      {/* Title */}
+      <text x={PAD_L} y={11} fontSize={9} fill={accent} fontWeight={600}>
+        point {pointLabel}
+      </text>
+
+      {/* Y grid + labels */}
+      {ticks.map((t, i) => (
+        <g key={i}>
+          <line
+            x1={PAD_L}
+            y1={yAt(t)}
+            x2={W - PAD_R}
+            y2={yAt(t)}
+            stroke={t === 0 ? "#d6d3d1" : "#f0efed"}
+            strokeWidth={t === 0 ? 0.6 : 0.4}
+          />
+          <text x={PAD_L - 3} y={yAt(t) + 3} fontSize={8} fill="#a8a29e" textAnchor="end">
+            {t === 0 ? "0" : t.toFixed(2)}
+          </text>
+        </g>
+      ))}
+
+      {/* X axis labels */}
+      {labels.map((lab, i) => (
+        <text
+          key={i}
+          x={xAt(i)}
+          y={H - 6}
+          fontSize={7.5}
+          fill="#78716c"
+          textAnchor="middle"
+        >
+          {lab}
+        </text>
+      ))}
+
+      {/* Data lines + dots */}
+      {series.map(s => {
+        const d = s.vals
+          .map((v, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`)
+          .join(" ");
+        return (
+          <g key={s.key}>
+            <path d={d} fill="none" stroke={s.color} strokeWidth={1.3} />
+            {s.vals.map((v, i) => (
+              <circle key={i} cx={xAt(i)} cy={yAt(v)} r={2} fill={s.color} />
+            ))}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/** One quaternion row: label + numeric + horizontal xyz bars.
+ *  Bars are normalized to a fixed max (0.35 ≈ 40°) so rows are comparable. */
+function QuatRow({ tag, q, accent }: { tag: string; q: Quat; accent: string }) {
+  const BAR_MAX = 0.35;
+  const axes = [
+    { v: q[1], color: "#ef4444" }, // x — red
+    { v: q[2], color: "#22c55e" }, // y — green
+    { v: q[3], color: "#3b82f6" }, // z — blue
+  ];
+  return (
+    <div className="grid grid-cols-[70px_1fr_88px] items-center gap-1 py-[1px] text-[10px]">
+      <div style={{ color: accent }} className="truncate font-semibold">{tag}</div>
+      <svg viewBox="-100 -12 200 24" preserveAspectRatio="none" className="h-[18px] w-full">
+        <line x1={-100} y1={0} x2={100} y2={0} stroke="#e7e5e4" strokeWidth={0.4} />
+        <line x1={0} y1={-12} x2={0} y2={12} stroke="#d6d3d1" strokeWidth={0.6} />
+        {axes.map((a, i) => {
+          const w = Math.max(-100, Math.min(100, (a.v / BAR_MAX) * 100));
+          const y = -9 + i * 6;
+          return (
+            <rect
+              key={i}
+              x={Math.min(0, w)}
+              y={y}
+              width={Math.abs(w)}
+              height={4}
+              fill={a.color}
+              opacity={0.9}
+            />
+          );
+        })}
+      </svg>
+      <div className="truncate font-mono text-[9.5px] text-[var(--muted)]">{fmtQuat(q)}</div>
+    </div>
+  );
+}
+
 function SampleCard({
   sample,
   frames,
@@ -361,14 +500,39 @@ function SampleCard({
     ctx.fillText(`f${f.toString().padStart(3, "0")}/${frames.length}`, 6, H - 6);
   }, [frames, frameIndex, sample.deform, size]);
 
-  // Per-point quaternions for current step.
+  // Per-point quaternions for current step (f -> fn) and the next step (fn -> fnn).
   const f = frameIndex % frames.length;
   const fn = (f + 1) % frames.length;
-  const qf = useMemo(
+  const fnn = (f + 2) % frames.length;
+  const qfA = useMemo(                                             // a  -> a'
     () => perPointForwardQuats(frames[f], frames[fn]),
     [frames, f, fn]
   );
-  const qb = useMemo(() => qf.map(quatConj), [qf]);
+  const qfB = useMemo(                                             // a' -> a''
+    () => perPointForwardQuats(frames[fn], frames[fnn]),
+    [frames, fn, fnn]
+  );
+  const qfDirect = useMemo(                                        // a  -> a''  direct
+    () => perPointForwardQuats(frames[f], frames[fnn]),
+    [frames, f, fnn]
+  );
+  // Composed: apply qfA then qfB.  In our convention q_total = qfB * qfA so
+  // that q_total acts on (a - c_t) to yield (a'' - c_{t+2}) via qB( qA( v ) ).
+  const qfComposed = useMemo(
+    () => qfA.map((qa, i) => quatNorm(quatMul(qfB[i], qa))),
+    [qfA, qfB]
+  );
+  // Transitivity error: angle between direct quat and the composed one.
+  const transErrDeg = useMemo(
+    () =>
+      qfDirect.map((qd, i) => {
+        // q_err = qfComposed * conj(qd)  -> angle from identity
+        const err = quatMul(qfComposed[i], quatConj(qd));
+        return quatAngleDeg(err);
+      }),
+    [qfDirect, qfComposed]
+  );
+  const qb = useMemo(() => qfA.map(quatConj), [qfA]);              // qb_a'a
 
   const angleStr = stats.cycleAngleDeg.toFixed(2);
   const resStr = stats.meanResidual.toExponential(1);
@@ -394,23 +558,48 @@ function SampleCard({
         />
       </div>
 
-      {/* Per-point quaternions, current step */}
+      {/* Per-point quaternions — numbers + bar graph of xyz */}
       <div className="font-mono text-[10px] leading-[1.35] text-[var(--muted)]">
-        <div className="mb-1 text-[10px] uppercase tracking-wide text-[var(--muted)]">
-          step f{f} → f{fn}
+        <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide">
+          <span>steps f{f}→f{fn}→f{fnn}</span>
+          <QuatAxisLegend />
         </div>
         {POINT_LABELS.map((lab, i) => {
-          const nxt = lab + "'";
+          const p1 = lab + "'";
+          const p2 = lab + "''";
+          const err = transErrDeg[i];
+          const errOk = err < 1;
+          const rows: { tag: string; q: Quat }[] = [
+            { tag: `qf_${lab}${p1}`,  q: qfA[i] },
+            { tag: `qb_${p1}${lab}`,  q: qb[i] },
+            { tag: `qf_${p1}${p2}`,   q: qfB[i] },
+            { tag: `qf_${lab}${p2}`,  q: qfDirect[i] },
+            { tag: `qfB∘qfA`,         q: qfComposed[i] },
+          ];
+          const chartLabels = [
+            `qf_${lab}${p1}`,
+            `qb_${p1}${lab}`,
+            `qf_${p1}${p2}`,
+            `qf_${lab}${p2}`,
+            `qfB∘qfA`,
+          ];
+          const chartQuats = [qfA[i], qb[i], qfB[i], qfDirect[i], qfComposed[i]];
           return (
-            <div key={lab} className="grid grid-cols-[auto_1fr] gap-x-1">
-              <div style={{ color: COLORS[i] }} className="font-semibold">
-                qf_{lab}{nxt}
+            <div key={lab} className="mb-1 rounded border border-[var(--card-border)] px-1 py-0.5">
+              {rows.map(r => (
+                <QuatRow key={r.tag} tag={r.tag} q={r.q} accent={COLORS[i]} />
+              ))}
+              <div className="mt-1">
+                <QuatLineChart
+                  pointLabel={lab}
+                  accent={COLORS[i]}
+                  labels={chartLabels}
+                  quats={chartQuats}
+                />
               </div>
-              <div className="truncate">{fmtQuat(qf[i])}</div>
-              <div style={{ color: COLORS[i] }} className="font-semibold">
-                qb_{nxt}{lab}
+              <div className={`mt-0.5 font-mono text-[10px] ${errOk ? "text-emerald-600" : "text-red-600"}`}>
+                trans ∠ {err.toFixed(2)}°
               </div>
-              <div className="truncate">{fmtQuat(qb[i])}</div>
             </div>
           );
         })}
@@ -420,6 +609,207 @@ function SampleCard({
         mean resid {resStr}
       </div>
     </div>
+  );
+}
+
+/* -------- small-angle demo -------- */
+
+function quatFromAxisAngleDeg(axis: V3, deg: number): Quat {
+  const a = (deg * Math.PI) / 180;
+  const h = a / 2;
+  const s = Math.sin(h);
+  const n = normalize(axis);
+  return [Math.cos(h), n[0] * s, n[1] * s, n[2] * s];
+}
+
+function quatRotateVec(q: Quat, v: V3): V3 {
+  const [w, x, y, z] = q;
+  // v' = q * v * q^-1 expanded
+  const c1x = y * v[2] - z * v[1];
+  const c1y = z * v[0] - x * v[2];
+  const c1z = x * v[1] - y * v[0];
+  const c2x = y * c1z - z * c1y;
+  const c2y = z * c1x - x * c1z;
+  const c2z = x * c1y - y * c1x;
+  return [v[0] + 2 * (w * c1x + c2x), v[1] + 2 * (w * c1y + c2y), v[2] + 2 * (w * c1z + c2z)];
+}
+
+function SmallAngleDemo() {
+  // Two rotations: q_a around X, q_b around Y. Compare compose vs vector-add.
+  const [angA, setAngA] = useState(10);
+  const [angB, setAngB] = useState(10);
+
+  const qA = useMemo(() => quatFromAxisAngleDeg([1, 0, 0], angA), [angA]);
+  const qB = useMemo(() => quatFromAxisAngleDeg([0, 1, 0], angB), [angB]);
+  const qCompose = useMemo(() => quatNorm(quatMul(qB, qA)), [qA, qB]);
+  // Vector-add approximation: sum vector parts, w = 1, normalize.
+  const qAdd = useMemo(
+    () => quatNorm([1, qA[1] + qB[1], qA[2] + qB[2], qA[3] + qB[3]]),
+    [qA, qB]
+  );
+  const errDeg = useMemo(() => {
+    const err = quatMul(qCompose, quatConj(qAdd));
+    return quatAngleDeg(err);
+  }, [qCompose, qAdd]);
+
+  // Visualize: rotate ref vector (0, 0, 1) by both, project to 2D (XY plane).
+  const refVec: V3 = [0, 0, 1];
+  const vCompose = useMemo(() => quatRotateVec(qCompose, refVec), [qCompose]);
+  const vAdd = useMemo(() => quatRotateVec(qAdd, refVec), [qAdd]);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [cw, setCw] = useState(300);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setCw(Math.max(180, Math.floor(e.contentRect.width)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    const size = cw;
+    if (canvas.width !== Math.floor(size * dpr)) {
+      canvas.width = Math.floor(size * dpr);
+      canvas.height = Math.floor(size * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = size, H = size;
+    ctx.fillStyle = "#fafaf9";
+    ctx.fillRect(0, 0, W, H);
+
+    // Draw unit-sphere equator (circle) for reference
+    ctx.strokeStyle = "#e7e5e4";
+    ctx.lineWidth = 1;
+    const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.38;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.stroke();
+    // Axes
+    ctx.beginPath();
+    ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
+    ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
+    ctx.stroke();
+
+    // Ref vector start (at (0,0)+size marker)
+    const proj = (v: V3) => ({
+      x: cx + v[0] * R,
+      y: cy - v[1] * R,
+      z: v[2],
+    });
+
+    const pStart = proj(refVec);
+    const pC = proj(vCompose);
+    const pA = proj(vAdd);
+
+    // Arrows from start to endpoints (xy projection)
+    const arrow = (to: { x: number; y: number; z: number }, color: string) => {
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(pStart.x, pStart.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+      // head
+      ctx.beginPath();
+      ctx.arc(to.x, to.y, Math.max(3, 1.5 + Math.abs(to.z) * 3), 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    // Draw start point
+    ctx.fillStyle = "#78716c";
+    ctx.beginPath();
+    ctx.arc(pStart.x, pStart.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#78716c";
+    ctx.font = `${Math.max(10, W * 0.035)}px ui-sans-serif, system-ui`;
+    ctx.fillText("start (0,0,1)", pStart.x + 6, pStart.y - 6);
+
+    arrow(pC, "#2563eb"); // compose — blue
+    arrow(pA, "#f97316"); // add — orange
+
+    ctx.fillStyle = "#2563eb";
+    ctx.fillText("compose (q_b·q_a)", 10, 18);
+    ctx.fillStyle = "#f97316";
+    ctx.fillText("add (vec sum)", 10, 34);
+  }, [cw, vCompose, vAdd]);
+
+  const okSmall = errDeg < 1;
+
+  return (
+    <section className="mt-6 rounded border border-[var(--card-border)] bg-[var(--card)] p-3">
+      <div className="mb-2 text-sm font-semibold">Small-angle: add vs multiply</div>
+      <p className="mb-3 text-[11px] text-[var(--muted)]">
+        q<sub>a</sub> = rotation around <span className="font-mono">x</span> by θ<sub>a</sub>,
+        q<sub>b</sub> = around <span className="font-mono">y</span> by θ<sub>b</sub>.
+        Compare true composition q<sub>b</sub>·q<sub>a</sub> with vector-add
+        (1, x<sub>a</sub>+x<sub>b</sub>, y<sub>a</sub>+y<sub>b</sub>, z<sub>a</sub>+z<sub>b</sub>) then normalized.
+      </p>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[11px] text-[var(--muted)]">
+              θ<sub>a</sub> (around x): <span className="font-mono">{angA.toFixed(0)}°</span>
+            </label>
+            <input
+              type="range" min={0} max={180} step={1}
+              value={angA}
+              onChange={e => setAngA(parseFloat(e.target.value))}
+              className="mt-1 w-full accent-[var(--foreground)]"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] text-[var(--muted)]">
+              θ<sub>b</sub> (around y): <span className="font-mono">{angB.toFixed(0)}°</span>
+            </label>
+            <input
+              type="range" min={0} max={180} step={1}
+              value={angB}
+              onChange={e => setAngB(parseFloat(e.target.value))}
+              className="mt-1 w-full accent-[var(--foreground)]"
+            />
+          </div>
+          <div className="font-mono text-[11px] leading-[1.5] text-[var(--muted)]">
+            <div>q<sub>a</sub>  = {fmtQuat(qA)}</div>
+            <div>q<sub>b</sub>  = {fmtQuat(qB)}</div>
+            <div className="text-[#2563eb]">compose = {fmtQuat(qCompose)}</div>
+            <div className="text-[#f97316]">add     = {fmtQuat(qAdd)}</div>
+          </div>
+          <div
+            className={`inline-block rounded px-2 py-1 font-mono text-xs ${
+              okSmall ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
+            }`}
+          >
+            Δ angle between compose &amp; add: {errDeg.toFixed(2)}°
+          </div>
+          <div className="text-[11px] leading-relaxed text-[var(--muted)]">
+            When both θ are small (≲10°), Δ ≈ 0. As θ grows, the error grows
+            quadratically. Above ~45° the two diverge visibly.
+          </div>
+        </div>
+        <div ref={wrapRef} className="w-full">
+          <canvas
+            ref={canvasRef}
+            style={{ width: "100%", height: cw + "px", display: "block" }}
+            className="rounded border border-[var(--card-border)]"
+          />
+          <div className="mt-1 text-[10px] text-[var(--muted)]">
+            Endpoints of rotating (0, 0, 1) by compose (blue) vs add (orange).
+            Projected to the XY plane.
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -575,6 +965,9 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Small-angle add-vs-multiply demo */}
+        <SmallAngleDemo />
+
         {/* Method note */}
         <section className="mt-6 rounded border border-[var(--card-border)] bg-[var(--card)] p-3 text-[11px] leading-relaxed text-[var(--muted)]">
           <div className="mb-1 font-semibold text-[var(--foreground)]">Method</div>
@@ -586,6 +979,12 @@ export default function Home() {
               <span className="font-mono">(pᵢ − centroid_t)</span> to{" "}
               <span className="font-mono">(pᵢ&apos; − centroid_{"{t+1}"})</span>.{" "}
               <span className="font-mono">qb_i&apos;i = qf_ii&apos;*</span> (conjugate).
+            </li>
+            <li>
+              Two-frame transitivity: compare direct{" "}
+              <span className="font-mono">qf_ii&apos;&apos;</span> (a → a&apos;&apos;) with the composed{" "}
+              <span className="font-mono">qf_i&apos;i&apos;&apos; ∘ qf_ii&apos;</span> (a → a&apos; → a&apos;&apos;). Angle between them = transitivity error.
+              For rigid rotation = 0°; for deform &gt; 0°.
             </li>
             <li>
               Cycle angle: compose per-step Kabsch rotations R<sub>t</sub> = F<sub>t+1</sub>·F<sub>t</sub><sup>T</sup> across the full cycle, take angle from identity. Rigid = 0°, deform &gt; 0°.
