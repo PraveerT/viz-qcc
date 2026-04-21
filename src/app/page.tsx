@@ -813,18 +813,306 @@ function SmallAngleDemo() {
   );
 }
 
+/* -------- real (Hungarian) sample card -------- */
+
+type RealClass = { classId: number; frames: number[][][] };        // frames[T][P][3]
+type RealData = { P: number; T: number; classes: RealClass[] };
+
+function aggregateQuats(P: V3[], Q: V3[]): {
+  perPoint: Quat[];
+  mean: Quat;
+} {
+  const cP = centroid(P);
+  const cQ = centroid(Q);
+  const qs = P.map((p, i) => quatFromVectors(sub(p, cP), sub(Q[i], cQ)));
+  // "Mean quaternion" via chordal mean then renormalize (OK when spread small).
+  const acc: Quat = [0, 0, 0, 0];
+  for (const q of qs) {
+    // Fix sign to the first quat's hemisphere to avoid antipodal cancellation.
+    const sign = qs[0][0] * q[0] + qs[0][1] * q[1] + qs[0][2] * q[2] + qs[0][3] * q[3] >= 0 ? 1 : -1;
+    acc[0] += sign * q[0]; acc[1] += sign * q[1]; acc[2] += sign * q[2]; acc[3] += sign * q[3];
+  }
+  const m = quatNorm([acc[0] / qs.length, acc[1] / qs.length, acc[2] / qs.length, acc[3] / qs.length]);
+  return { perPoint: qs, mean: m };
+}
+
+function statsBand(values: number[]): { mean: number; lo: number; hi: number } {
+  if (!values.length) return { mean: 0, lo: 0, hi: 0 };
+  let s = 0;
+  for (const v of values) s += v;
+  const mean = s / values.length;
+  let sq = 0;
+  for (const v of values) sq += (v - mean) * (v - mean);
+  const std = Math.sqrt(sq / values.length);
+  return { mean, lo: mean - std, hi: mean + std };
+}
+
+/** Line chart overlaying mean±std bands for x/y/z components across all P points. */
+function QuatBandChart({
+  labels,
+  quatsPerPoint,
+  max = 0.35,
+}: {
+  labels: string[];
+  quatsPerPoint: Quat[][];   // [quatIdx][pointIdx] -> Quat
+  max?: number;
+}) {
+  const W = 300;
+  const H = 130;
+  const PAD_L = 28;
+  const PAD_R = 8;
+  const PAD_T = 8;
+  const PAD_B = 22;
+  const innerW = W - PAD_L - PAD_R;
+  const innerH = H - PAD_T - PAD_B;
+  const n = labels.length;
+  const xAt = (i: number) => PAD_L + (n === 1 ? innerW / 2 : (innerW * i) / (n - 1));
+  const yAt = (v: number) =>
+    PAD_T + innerH / 2 - (Math.max(-max, Math.min(max, v)) / max) * (innerH / 2);
+
+  const series = [
+    { key: "x", color: "#ef4444", idx: 1 },
+    { key: "y", color: "#22c55e", idx: 2 },
+    { key: "z", color: "#3b82f6", idx: 3 },
+  ];
+
+  // For each quaternion position, gather component values across points.
+  const bands = series.map(s => {
+    return quatsPerPoint.map(qs => statsBand(qs.map(q => q[s.idx])));
+  });
+
+  const ticks = [-max, -max / 2, 0, max / 2, max];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="w-full">
+      {ticks.map((t, i) => (
+        <g key={i}>
+          <line x1={PAD_L} y1={yAt(t)} x2={W - PAD_R} y2={yAt(t)}
+            stroke={t === 0 ? "#d6d3d1" : "#f0efed"}
+            strokeWidth={t === 0 ? 0.6 : 0.4} />
+          <text x={PAD_L - 3} y={yAt(t) + 3} fontSize={8} fill="#a8a29e" textAnchor="end">
+            {t === 0 ? "0" : t.toFixed(2)}
+          </text>
+        </g>
+      ))}
+      {labels.map((lab, i) => (
+        <text key={i} x={xAt(i)} y={H - 6} fontSize={7.5} fill="#78716c" textAnchor="middle">{lab}</text>
+      ))}
+      {series.map((s, si) => {
+        // Band polygon: hi values forward, lo values reverse.
+        const hi = bands[si].map((b, i) => `${xAt(i).toFixed(1)},${yAt(b.hi).toFixed(1)}`);
+        const lo = bands[si].slice().reverse().map((b, i) => {
+          const idx = bands[si].length - 1 - i;
+          return `${xAt(idx).toFixed(1)},${yAt(b.lo).toFixed(1)}`;
+        });
+        const poly = hi.concat(lo).join(" ");
+        const meanPath = bands[si]
+          .map((b, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(b.mean).toFixed(1)}`)
+          .join(" ");
+        return (
+          <g key={s.key}>
+            <polygon points={poly} fill={s.color} opacity={0.12} />
+            <path d={meanPath} fill="none" stroke={s.color} strokeWidth={1.3} />
+            {bands[si].map((b, i) => (
+              <circle key={i} cx={xAt(i)} cy={yAt(b.mean)} r={1.5} fill={s.color} />
+            ))}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function RealSampleCard({
+  classId,
+  frames,
+  frameIndex,
+}: {
+  classId: number;
+  frames: V3[][];
+  frameIndex: number;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [size, setSize] = useState(300);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setSize(Math.max(180, Math.floor(e.contentRect.width)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Draw current frame.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    if (canvas.width !== Math.floor(size * dpr)) {
+      canvas.width = Math.floor(size * dpr);
+      canvas.height = Math.floor(size * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = size, H = size;
+    ctx.fillStyle = "#fafaf9";
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = "#e7e5e4";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(W / 2, 10); ctx.lineTo(W / 2, H - 10);
+    ctx.moveTo(10, H / 2); ctx.lineTo(W - 10, H / 2);
+    ctx.stroke();
+
+    const f = frameIndex % frames.length;
+    const sc = W * 0.32;
+    const pts = frames[f];
+
+    // Light fading trail: overlay previous frame positions faint
+    const trailFrames = 6;
+    for (let k = 1; k <= trailFrames; k++) {
+      const tf = frames[(f - k + frames.length) % frames.length];
+      const alpha = ((trailFrames - k + 1) / trailFrames) * 0.15;
+      ctx.fillStyle = `rgba(120, 113, 108, ${alpha})`;
+      for (const p of tf) {
+        ctx.beginPath();
+        ctx.arc(W / 2 + p[0] * sc, H / 2 - p[1] * sc, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    for (let i = 0; i < pts.length; i++) {
+      const [x, y, z] = pts[i];
+      const px = W / 2 + x * sc;
+      const py = H / 2 - y * sc;
+      const sz = Math.max(1.5, 2 + z * 2);
+      // Per-point color by angle around origin (hue cue).
+      const hue = ((Math.atan2(y, x) + Math.PI) / (2 * Math.PI)) * 360;
+      ctx.fillStyle = `hsl(${hue.toFixed(0)}, 65%, 55%)`;
+      ctx.beginPath();
+      ctx.arc(px, py, sz, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.fillStyle = "#a8a29e";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText(`f${f.toString().padStart(2, "0")}/${frames.length}`, 6, H - 6);
+  }, [frames, frameIndex, size]);
+
+  // Current triplet frames (f, fn, fnn) per-point quat tables.
+  const T = frames.length;
+  const f = frameIndex % T;
+  const fn = (f + 1) % T;
+  const fnn = (f + 2) % T;
+
+  const { perPoint: qfA, mean: qfAmean } = useMemo(
+    () => aggregateQuats(frames[f], frames[fn]),
+    [frames, f, fn]
+  );
+  const { perPoint: qfB, mean: qfBmean } = useMemo(
+    () => aggregateQuats(frames[fn], frames[fnn]),
+    [frames, fn, fnn]
+  );
+  const { perPoint: qfDirect, mean: qfDmean } = useMemo(
+    () => aggregateQuats(frames[f], frames[fnn]),
+    [frames, f, fnn]
+  );
+  const qb = useMemo(() => qfA.map(quatConj), [qfA]);
+  const qbMean = useMemo(() => quatConj(qfAmean), [qfAmean]);
+  const qfComposed = useMemo(
+    () => qfA.map((qa, i) => quatNorm(quatMul(qfB[i], qa))),
+    [qfA, qfB]
+  );
+  const qfComposedMean = useMemo(() => quatNorm(quatMul(qfBmean, qfAmean)), [qfAmean, qfBmean]);
+  const transDeg = useMemo(
+    () =>
+      qfDirect.map((qd, i) => {
+        const err = quatMul(qfComposed[i], quatConj(qd));
+        return quatAngleDeg(err);
+      }),
+    [qfDirect, qfComposed]
+  );
+  const transStats = useMemo(() => statsBand(transDeg), [transDeg]);
+
+  const labels = ["qf_aa'", "qb_a'a", "qf_a'a''", "qf_aa''", "qfB∘qfA"];
+  const quatsPerPoint: Quat[][] = [qfA, qb, qfB, qfDirect, qfComposed];
+  const meanQuats: Quat[] = [qfAmean, qbMean, qfBmean, qfDmean, qfComposedMean];
+
+  return (
+    <div className="flex flex-col gap-2 rounded border border-[var(--card-border)] bg-[var(--card)] p-2.5">
+      <div className="flex items-baseline justify-between">
+        <div className="text-sm font-semibold">class {String(classId + 1).padStart(2, "0")}</div>
+        <div
+          className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
+            transStats.mean < 2 ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
+          }`}
+        >
+          trans μ {transStats.mean.toFixed(2)}° ±{(transStats.hi - transStats.mean).toFixed(2)}
+        </div>
+      </div>
+      <div ref={wrapRef} className="w-full">
+        <canvas
+          ref={canvasRef}
+          style={{ width: "100%", height: size + "px", display: "block" }}
+          className="rounded border border-[var(--card-border)]"
+        />
+      </div>
+
+      <div className="font-mono text-[10px] leading-[1.35] text-[var(--muted)]">
+        <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide">
+          <span>P={quatsPerPoint[0].length} · steps f{f}→f{fn}→f{fnn}</span>
+          <QuatAxisLegend />
+        </div>
+
+        {/* Mean quaternion bar-rows (analogous to synthetic per-point rows) */}
+        {labels.map((lab, i) => (
+          <QuatRow key={lab} tag={lab} q={meanQuats[i]} accent="#78716c" />
+        ))}
+
+        <div className="mt-1">
+          <QuatBandChart labels={labels} quatsPerPoint={quatsPerPoint} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* -------- page -------- */
+
+type View = "synth" | "real";
 
 const N_OPTIONS = [16, 32, 64, 128] as const;
 const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4] as const;
 
 export default function Home() {
+  const [view, setView] = useState<View>("synth");
   const [N, setN] = useState<(typeof N_OPTIONS)[number]>(64);
   const [totalRotTurns, setTotalRotTurns] = useState(1);
   const [deformAmp, setDeformAmp] = useState(0.35);
   const [speed, setSpeed] = useState<(typeof SPEED_OPTIONS)[number]>(1);
   const [playing, setPlaying] = useState(true);
   const [frameIndex, setFrameIndex] = useState(0);
+
+  // Real-data JSON, fetched on demand.
+  const [realData, setRealData] = useState<RealData | null>(null);
+  const [realError, setRealError] = useState<string | null>(null);
+  useEffect(() => {
+    if (view !== "real" || realData) return;
+    fetch("/hungarian_samples.json")
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data: RealData) => {
+        setRealData(data);
+        setRealError(null);
+      })
+      .catch(err => setRealError(String(err)));
+  }, [view, realData]);
 
   const totalRotRad = totalRotTurns * 2 * Math.PI;
 
@@ -835,6 +1123,9 @@ export default function Home() {
       return { sample: s, frames, stats };
     });
   }, [N, totalRotRad, deformAmp]);
+
+  // Active T for the animation clock depends on the view.
+  const activeT = view === "real" ? (realData?.T ?? 32) : N;
 
   // Animation
   const rafRef = useRef<number>(0);
@@ -847,10 +1138,10 @@ export default function Home() {
     accumRef.current += dt * 12 * speed;
     while (accumRef.current >= 1) {
       accumRef.current -= 1;
-      setFrameIndex(f => (f + 1) % N);
+      setFrameIndex(f => (f + 1) % activeT);
     }
     if (playing) rafRef.current = requestAnimationFrame(advance);
-  }, [playing, speed, N]);
+  }, [playing, speed, activeT]);
 
   useEffect(() => {
     if (!playing) {
@@ -868,7 +1159,7 @@ export default function Home() {
         <div className="mx-auto max-w-5xl px-3 py-2 sm:px-5">
           <div className="flex items-center justify-between gap-3">
             <h1 className="truncate text-sm font-semibold sm:text-base">
-              QCC synth: 3-point cycle consistency
+              QCC viz: quaternion cycle consistency
             </h1>
             <button
               onClick={() => setPlaying(p => !p)}
@@ -877,10 +1168,92 @@ export default function Home() {
               {playing ? "⏸ pause" : "▶ play"}
             </button>
           </div>
+          {/* View tabs */}
+          <div className="mt-1 flex gap-1">
+            {(["synth", "real"] as View[]).map(v => (
+              <button
+                key={v}
+                onClick={() => { setView(v); setFrameIndex(0); }}
+                className={`rounded px-3 py-1 text-xs ${
+                  v === view
+                    ? "bg-[var(--foreground)] text-[var(--background)]"
+                    : "border border-[var(--card-border)] hover:bg-[var(--card)]"
+                }`}
+              >
+                {v === "synth" ? "Synthetic 3-pt" : "Real (Hungarian)"}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-3 py-4 sm:px-5">
+        {view === "real" ? (
+          <section>
+            {realError && (
+              <div className="mb-3 rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700">
+                Failed to load hungarian_samples.json: {realError}
+              </div>
+            )}
+            {!realData ? (
+              <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-4 text-sm text-[var(--muted)]">
+                Loading real Hungarian samples…
+              </div>
+            ) : (
+              <>
+                <div className="mb-3 flex items-center gap-3 text-xs text-[var(--muted)]">
+                  <span>25 classes · P={realData.P} · T={realData.T}</span>
+                  <span>one test sample per class, correspondence-aligned via Hungarian</span>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {realData.classes.map(c => (
+                    <RealSampleCard
+                      key={c.classId}
+                      classId={c.classId}
+                      frames={c.frames as V3[][]}
+                      frameIndex={frameIndex}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        ) : (
+          <SynthView
+            N={N} setN={setN}
+            totalRotTurns={totalRotTurns} setTotalRotTurns={setTotalRotTurns}
+            deformAmp={deformAmp} setDeformAmp={setDeformAmp}
+            speed={speed} setSpeed={setSpeed}
+            setFrameIndex={setFrameIndex}
+            datasets={datasets}
+            frameIndex={frameIndex}
+          />
+        )}
+      </main>
+    </div>
+  );
+}
+
+type SynthViewProps = {
+  N: (typeof N_OPTIONS)[number];
+  setN: (n: (typeof N_OPTIONS)[number]) => void;
+  totalRotTurns: number;
+  setTotalRotTurns: (n: number) => void;
+  deformAmp: number;
+  setDeformAmp: (n: number) => void;
+  speed: (typeof SPEED_OPTIONS)[number];
+  setSpeed: (n: (typeof SPEED_OPTIONS)[number]) => void;
+  setFrameIndex: (f: number) => void;
+  datasets: { sample: Sample; frames: V3[][]; stats: SampleStats }[];
+  frameIndex: number;
+};
+
+function SynthView({
+  N, setN, totalRotTurns, setTotalRotTurns, deformAmp, setDeformAmp,
+  speed, setSpeed, setFrameIndex, datasets, frameIndex,
+}: SynthViewProps) {
+  return (
+    <>
         {/* Controls */}
         <section className="mb-4 grid grid-cols-1 gap-3 rounded border border-[var(--card-border)] bg-[var(--card)] p-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
@@ -994,7 +1367,6 @@ export default function Home() {
             </li>
           </ul>
         </section>
-      </main>
-    </div>
+    </>
   );
 }
