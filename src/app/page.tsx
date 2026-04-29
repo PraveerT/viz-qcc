@@ -2,1743 +2,1167 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
-/* --------------------------------------------------------------------------
-   Synthetic 3-point QCC playground.
-
-   Three points A (red), B (green), C (blue) form a triangle over N frames.
-     Rigid   X/Y/Z   rotate as a single rigid body about the chosen axis.
-     Deform  X/Y/Z   add an independent random-walk translation per point on
-                     top of the rigid rotation (breaks rigidity).
-
-   Per-frame metrics shown live:
-     - qf_aa'   forward quaternion rotating (a - centroid_t) to (a' - centroid_{t+1})
-     - qb_a'a   its conjugate (backward)
-     - same for points b and c
-     - cycle angle from composing the per-triangle Kabsch step rotations over
-       the full cycle  (0 deg for rigid, > 0 for deform)
-   -------------------------------------------------------------------------- */
-
-type V3 = [number, number, number];
-type M3 = [number, number, number, number, number, number, number, number, number];
-type Quat = [number, number, number, number];
-
-const IDENTITY_Q: Quat = [1, 0, 0, 0];
-const COLORS = ["#ef4444", "#22c55e", "#3b82f6"];
-const POINT_LABELS = ["a", "b", "c"] as const;
-
-const BASE_POINTS: V3[] = [
-  [0.6, 0.0, 0.0],
-  [-0.3, 0.52, 0.0],
-  [-0.3, -0.52, 0.0],
-];
-
-type Axis = "x" | "y" | "z";
+type Top3 = [number, number][];
 type Sample = {
-  name: string;
-  axis: Axis;
-  deform: boolean;
-  seed: number;
+  idx: number;
+  rel_path: string;
+  true_class: number;
+  pred_class: number;
+  correct: boolean;
+  top3: Top3;
+  pts_q1000: number[][][];
+  depth_png_b64: string;
+};
+type Payload = {
+  target_class: number;
+  compare_class: number;
+  class_names: string[];
+  frames: number;
+  points: number;
+  depth_w: number;
+  depth_h: number;
+  samples_c3: Sample[];
+  samples_c16: Sample[];
 };
 
-const SAMPLES: Sample[] = [
-  { name: "Rigid X",  axis: "x", deform: false, seed: 0 },
-  { name: "Rigid Y",  axis: "y", deform: false, seed: 0 },
-  { name: "Rigid Z",  axis: "z", deform: false, seed: 0 },
-  { name: "Deform X", axis: "x", deform: true,  seed: 11 },
-  { name: "Deform Y", axis: "y", deform: true,  seed: 22 },
-  { name: "Deform Z", axis: "z", deform: true,  seed: 33 },
-];
+const MAX_POINTS = 512;
 
-/* -------- math -------- */
-
-function mulberry32(seed: number) {
-  let t = seed;
-  return () => {
-    t = (t + 0x6d2b79f5) | 0;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
+function drawArrow2D(
+  ctx: CanvasRenderingContext2D,
+  x0: number, y0: number, x1: number, y1: number,
+  color: string, alpha: number,
+) {
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1, y1);
+  ctx.stroke();
+  const dx = x1 - x0, dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) { ctx.globalAlpha = 1; return; }
+  const ux = dx / len, uy = dy / len;
+  const ah = Math.min(4, len * 0.5);
+  const px = -uy, py = ux;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 - ux * ah + px * ah * 0.5, y1 - uy * ah + py * ah * 0.5);
+  ctx.lineTo(x1 - ux * ah - px * ah * 0.5, y1 - uy * ah - py * ah * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
 }
 
-function rotAxis(axis: Axis, p: V3, a: number): V3 {
-  const c = Math.cos(a);
-  const s = Math.sin(a);
-  const [x, y, z] = p;
-  if (axis === "x") return [x, y * c - z * s, y * s + z * c];
-  if (axis === "y") return [x * c + z * s, y, -x * s + z * c];
-  return [x * c - y * s, x * s + y * c, z];
-}
-
-const sub = (a: V3, b: V3): V3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const add = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const scale = (v: V3, s: number): V3 => [v[0] * s, v[1] * s, v[2] * s];
-const ddot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const dnorm = (v: V3) => Math.hypot(v[0], v[1], v[2]);
-const cross = (a: V3, b: V3): V3 => [
-  a[1] * b[2] - a[2] * b[1],
-  a[2] * b[0] - a[0] * b[2],
-  a[0] * b[1] - a[1] * b[0],
-];
-const normalize = (v: V3, eps = 1e-9): V3 => {
-  const n = dnorm(v);
-  return n < eps ? [0, 0, 0] : scale(v, 1 / n);
-};
-const centroid = (pts: V3[]): V3 => {
-  const n = pts.length;
-  const c: V3 = [0, 0, 0];
-  for (const p of pts) { c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; }
-  return [c[0] / n, c[1] / n, c[2] / n];
-};
-
-function frameFromPoints(p0: V3, p1: V3, p2: V3): M3 {
-  const e1 = sub(p1, p0);
-  const e2 = sub(p2, p0);
-  const n1 = normalize(e1);
-  const e2p = sub(e2, scale(n1, ddot(e2, n1)));
-  const n2 = normalize(e2p);
-  const n3 = cross(n1, n2);
-  return [n1[0], n1[1], n1[2], n2[0], n2[1], n2[2], n3[0], n3[1], n3[2]];
-}
-function matMulT(A: M3, B: M3): M3 {
-  const r = new Array(9);
-  for (let i = 0; i < 3; i++)
-    for (let j = 0; j < 3; j++) {
-      let s = 0;
-      for (let k = 0; k < 3; k++) s += A[i * 3 + k] * B[j * 3 + k];
-      r[i * 3 + j] = s;
-    }
-  return r as M3;
-}
-function matToQuat(m: M3): Quat {
-  const [m00, m01, m02, m10, m11, m12, m20, m21, m22] = m;
-  const tr = m00 + m11 + m22;
-  if (tr > 0) {
-    const s = 0.5 / Math.sqrt(tr + 1);
-    return [0.25 / s, (m21 - m12) * s, (m02 - m20) * s, (m10 - m01) * s];
-  } else if (m00 > m11 && m00 > m22) {
-    const s = 2 * Math.sqrt(1 + m00 - m11 - m22);
-    return [(m21 - m12) / s, 0.25 * s, (m01 + m10) / s, (m02 + m20) / s];
-  } else if (m11 > m22) {
-    const s = 2 * Math.sqrt(1 + m11 - m00 - m22);
-    return [(m02 - m20) / s, (m01 + m10) / s, 0.25 * s, (m12 + m21) / s];
+function halton(i: number, base: number): number {
+  let f = 1, r = 0, n = i;
+  while (n > 0) {
+    f /= base;
+    r += f * (n % base);
+    n = Math.floor(n / base);
   }
-  const s = 2 * Math.sqrt(1 + m22 - m00 - m11);
-  return [(m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, 0.25 * s];
-}
-function quatNorm(q: Quat): Quat {
-  const n = Math.hypot(q[0], q[1], q[2], q[3]);
-  return n < 1e-9 ? [1, 0, 0, 0] : [q[0] / n, q[1] / n, q[2] / n, q[3] / n];
-}
-function quatMul(a: Quat, b: Quat): Quat {
-  const [w1, x1, y1, z1] = a;
-  const [w2, x2, y2, z2] = b;
-  return [
-    w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-    w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-    w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-    w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-  ];
-}
-function quatConj(q: Quat): Quat {
-  return [q[0], -q[1], -q[2], -q[3]];
-}
-function quatAngleDeg(q: Quat): number {
-  const w = Math.min(1, Math.max(-1, Math.abs(quatNorm(q)[0])));
-  return (2 * Math.acos(w) * 180) / Math.PI;
+  return r;
 }
 
-/** Rotate a 3D vector by a unit quaternion. */
-function quatRotate(q: Quat, v: V3): V3 {
-  const [w, x, y, z] = q;
-  const c1x = y * v[2] - z * v[1];
-  const c1y = z * v[0] - x * v[2];
-  const c1z = x * v[1] - y * v[0];
-  const c2x = y * c1z - z * c1y;
-  const c2y = z * c1x - x * c1z;
-  const c2z = x * c1y - y * c1x;
-  return [
-    v[0] + 2 * (w * c1x + c2x),
-    v[1] + 2 * (w * c1y + c2y),
-    v[2] + 2 * (w * c1z + c2z),
-  ];
-}
-
-/** Shortest-arc unit quaternion rotating v1 to v2. */
-function quatFromVectors(v1: V3, v2: V3): Quat {
-  const u1 = normalize(v1);
-  const u2 = normalize(v2);
-  const d = ddot(u1, u2);
-  const w = 1 + d;
-  if (w < 1e-6) {
-    // antipodal: pick any perpendicular axis, rotate 180°
-    const alt: V3 = Math.abs(u1[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-    const axis = normalize(cross(u1, alt));
-    return quatNorm([0, axis[0], axis[1], axis[2]]);
+function convexHull2D(xs: number[], ys: number[]): [number, number][] {
+  const pts: [number, number][] = xs.map((x, i) => [x, ys[i]]);
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (O: [number, number], A: [number, number], B: [number, number]) =>
+    (A[0] - O[0]) * (B[1] - O[1]) - (A[1] - O[1]) * (B[0] - O[0]);
+  const lower: [number, number][] = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
   }
-  const axis = cross(u1, u2);
-  return quatNorm([w, axis[0], axis[1], axis[2]]);
-}
-
-/** Horn's quaternion Kabsch. Works for any N ≥ 3.
- *  Returns unit quaternion rotating centered P onto centered Q. */
-function kabschQuat(P: V3[], Q: V3[]): Quat {
-  const cP = centroid(P);
-  const cQ = centroid(Q);
-  // Cross-covariance S (3x3)
-  const S = [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0],
-  ];
-  for (let k = 0; k < P.length; k++) {
-    const px = P[k][0] - cP[0], py = P[k][1] - cP[1], pz = P[k][2] - cP[2];
-    const qx = Q[k][0] - cQ[0], qy = Q[k][1] - cQ[1], qz = Q[k][2] - cQ[2];
-    S[0][0] += px * qx; S[0][1] += px * qy; S[0][2] += px * qz;
-    S[1][0] += py * qx; S[1][1] += py * qy; S[1][2] += py * qz;
-    S[2][0] += pz * qx; S[2][1] += pz * qy; S[2][2] += pz * qz;
+  const upper: [number, number][] = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
   }
-  const Sxx = S[0][0], Sxy = S[0][1], Sxz = S[0][2];
-  const Syx = S[1][0], Syy = S[1][1], Syz = S[1][2];
-  const Szx = S[2][0], Szy = S[2][1], Szz = S[2][2];
-  const N: number[][] = [
-    [Sxx + Syy + Szz, Syz - Szy,         Szx - Sxz,         Sxy - Syx],
-    [Syz - Szy,       Sxx - Syy - Szz,   Sxy + Syx,         Szx + Sxz],
-    [Szx - Sxz,       Sxy + Syx,        -Sxx + Syy - Szz,   Syz + Szy],
-    [Sxy - Syx,       Szx + Sxz,         Syz + Szy,        -Sxx - Syy + Szz],
-  ];
-  // Power iteration for dominant eigenvector of a 4x4 symmetric matrix.
-  // Use a shifted matrix to prefer the positive-eigenvalue side.
-  const SHIFT = Math.max(Math.abs(Sxx), Math.abs(Syy), Math.abs(Szz)) * 4 + 1;
-  let v = [1, 0.01, 0.01, 0.01];
-  for (let iter = 0; iter < 60; iter++) {
-    const u = [
-      (N[0][0] + SHIFT) * v[0] + N[0][1] * v[1] + N[0][2] * v[2] + N[0][3] * v[3],
-      N[1][0] * v[0] + (N[1][1] + SHIFT) * v[1] + N[1][2] * v[2] + N[1][3] * v[3],
-      N[2][0] * v[0] + N[2][1] * v[1] + (N[2][2] + SHIFT) * v[2] + N[2][3] * v[3],
-      N[3][0] * v[0] + N[3][1] * v[1] + N[3][2] * v[2] + (N[3][3] + SHIFT) * v[3],
-    ];
-    const n = Math.hypot(u[0], u[1], u[2], u[3]);
-    if (n < 1e-12) break;
-    v = [u[0] / n, u[1] / n, u[2] / n, u[3] / n];
-  }
-  // v is [w, x, y, z]
-  return quatNorm([v[0], v[1], v[2], v[3]]);
+  lower.pop(); upper.pop();
+  return lower.concat(upper);
 }
 
-/** Kabsch for 3 points. Returns rotation matrix (row-major) and mean residual. */
-function kabsch(P: V3[], Q: V3[]): { R: M3; residual: number } {
-  const cP = centroid(P);
-  const cQ = centroid(Q);
-  const Pc = P.map(p => sub(p, cP));
-  const Qc = Q.map(q => sub(q, cQ));
-  const R = matMulT(frameFromPoints(Q[0], Q[1], Q[2]), frameFromPoints(P[0], P[1], P[2]));
-  let resid = 0;
-  for (let i = 0; i < 3; i++) {
-    const [px, py, pz] = Pc[i];
-    const rx = R[0] * px + R[1] * py + R[2] * pz;
-    const ry = R[3] * px + R[4] * py + R[5] * pz;
-    const rz = R[6] * px + R[7] * py + R[8] * pz;
-    const [qx, qy, qz] = Qc[i];
-    resid += (rx - qx) ** 2 + (ry - qy) ** 2 + (rz - qz) ** 2;
-  }
-  return { R, residual: resid / 3 };
+function project(
+  px: number, py: number, pz: number,
+  yaw: number, pitch: number,
+  cw: number, ch: number,
+  zoom: number = 1,
+  panX: number = 0, panY: number = 0,
+): [number, number, number] {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const cx = Math.cos(pitch), sx = Math.sin(pitch);
+  const x = px * cy + pz * sy;
+  let y = py;
+  let z = -px * sy + pz * cy;
+  const y2 = y * cx - z * sx;
+  const z2 = y * sx + z * cx;
+  y = y2; z = z2;
+  const focal = 2.6;
+  const camZ = 3.5;
+  const denom = camZ - z;
+  const sx2 = (x * focal) / denom;
+  const sy2 = (y * focal) / denom;
+  const half = Math.min(cw, ch) * 0.5 * zoom;
+  return [cw * 0.5 + panX + sx2 * half, ch * 0.5 + panY - sy2 * half, denom];
 }
 
-/* -------- data -------- */
-
-function generateDeformTracks(sample: Sample, N: number, amp: number): V3[][] {
-  if (!sample.deform) return [];
-  const rng = mulberry32(sample.seed * 7919 + 1337);
-  const tracks: V3[][] = [];
-  for (let i = 0; i < 3; i++) {
-    const track: V3[] = [];
-    let cur: V3 = [0, 0, 0];
-    for (let f = 0; f < N; f++) {
-      const step = amp / 24;
-      cur = [
-        cur[0] + (rng() - 0.5) * step,
-        cur[1] + (rng() - 0.5) * step,
-        cur[2] + (rng() - 0.5) * step,
-      ];
-      track.push(cur);
-    }
-    tracks.push(track);
-  }
-  return tracks;
-}
-
-function generateFrames(sample: Sample, N: number, totalRot: number, amp: number): V3[][] {
-  const deform = generateDeformTracks(sample, N, amp);
-  const frames: V3[][] = [];
-  for (let f = 0; f < N; f++) {
-    const a = (f / N) * totalRot;
-    const pts: V3[] = BASE_POINTS.map((p, i) => {
-      let q: V3 = rotAxis(sample.axis, p, a);
-      if (sample.deform) q = add(q, deform[i][f]);
-      return q;
-    });
-    frames.push(pts);
-  }
-  return frames;
-}
-
-type SampleStats = {
-  cycleAngleDeg: number;
-  meanResidual: number;
-};
-
-function computeSampleStats(frames: V3[][]): SampleStats {
-  const N = frames.length;
-  let resTotal = 0;
-  let qComp: Quat = IDENTITY_Q;
-  for (let t = 0; t < N; t++) {
-    const tn = (t + 1) % N;
-    const { R, residual } = kabsch(frames[t], frames[tn]);
-    qComp = quatMul(qComp, quatNorm(matToQuat(R)));
-    resTotal += residual;
-  }
-  return { cycleAngleDeg: quatAngleDeg(qComp), meanResidual: resTotal / N };
-}
-
-/** Per-point forward quaternions for frame-pair (t, t+1). Each is shortest-arc
- *  rotation from (p_i - centroid_t) to (p'_i - centroid_{t+1}). */
-function perPointForwardQuats(P: V3[], Q: V3[]): Quat[] {
-  const cP = centroid(P);
-  const cQ = centroid(Q);
-  return P.map((p, i) => quatFromVectors(sub(p, cP), sub(Q[i], cQ)));
-}
-
-/* -------- format helpers -------- */
-
-const signed = (x: number) => (x >= 0 ? "+" : "") + x.toFixed(2);
-function fmtQuat(q: Quat): string {
-  return `(${signed(q[0])}, ${signed(q[1])}, ${signed(q[2])}, ${signed(q[3])})`;
-}
-
-/* -------- components -------- */
-
-function QuatAxisLegend() {
-  return (
-    <span className="flex items-center gap-1 text-[9px] normal-case tracking-normal">
-      <span style={{ color: "#ef4444" }}>x</span>
-      <span style={{ color: "#22c55e" }}>y</span>
-      <span style={{ color: "#3b82f6" }}>z</span>
-    </span>
-  );
-}
-
-/** Grouped line-chart: X axis = quat labels, three lines (x, y, z) tracking
- *  the component values across the 5 quaternions for one point.
- *  One chart per point (a/b/c) in a card. */
-function QuatLineChart({
-  pointLabel,
-  accent,
-  labels,
-  quats,
-  max = 0.35,
-}: {
-  pointLabel: string;
-  accent: string;
-  labels: string[];
-  quats: Quat[];
-  max?: number;
-}) {
-  const W = 220;
-  const H = 110;
-  const PAD_L = 28;
-  const PAD_R = 8;
-  const PAD_T = 8;
-  const PAD_B = 22;
-  const innerW = W - PAD_L - PAD_R;
-  const innerH = H - PAD_T - PAD_B;
-  const n = quats.length;
-  const xAt = (i: number) => PAD_L + (n === 1 ? innerW / 2 : (innerW * i) / (n - 1));
-  const yAt = (v: number) => PAD_T + innerH / 2 - (Math.max(-max, Math.min(max, v)) / max) * (innerH / 2);
-
-  const series = [
-    { key: "x", color: "#ef4444", vals: quats.map(q => q[1]) },
-    { key: "y", color: "#22c55e", vals: quats.map(q => q[2]) },
-    { key: "z", color: "#3b82f6", vals: quats.map(q => q[3]) },
-  ];
-
-  // Y-axis ticks at -max, -max/2, 0, +max/2, +max
-  const ticks = [-max, -max / 2, 0, max / 2, max];
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="w-full">
-      {/* Title */}
-      <text x={PAD_L} y={11} fontSize={9} fill={accent} fontWeight={600}>
-        point {pointLabel}
-      </text>
-
-      {/* Y grid + labels */}
-      {ticks.map((t, i) => (
-        <g key={i}>
-          <line
-            x1={PAD_L}
-            y1={yAt(t)}
-            x2={W - PAD_R}
-            y2={yAt(t)}
-            stroke={t === 0 ? "#d6d3d1" : "#f0efed"}
-            strokeWidth={t === 0 ? 0.6 : 0.4}
-          />
-          <text x={PAD_L - 3} y={yAt(t) + 3} fontSize={8} fill="#a8a29e" textAnchor="end">
-            {t === 0 ? "0" : t.toFixed(2)}
-          </text>
-        </g>
-      ))}
-
-      {/* X axis labels */}
-      {labels.map((lab, i) => (
-        <text
-          key={i}
-          x={xAt(i)}
-          y={H - 6}
-          fontSize={7.5}
-          fill="#78716c"
-          textAnchor="middle"
-        >
-          {lab}
-        </text>
-      ))}
-
-      {/* Data lines + dots */}
-      {series.map(s => {
-        const d = s.vals
-          .map((v, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`)
-          .join(" ");
-        return (
-          <g key={s.key}>
-            <path d={d} fill="none" stroke={s.color} strokeWidth={1.3} />
-            {s.vals.map((v, i) => (
-              <circle key={i} cx={xAt(i)} cy={yAt(v)} r={2} fill={s.color} />
-            ))}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-/** One quaternion row: label + horizontal xyz bars on first line, full numeric
- *  values on the second line so nothing gets truncated. */
-function QuatRow({ tag, q, accent }: { tag: string; q: Quat; accent: string }) {
-  const BAR_MAX = 0.35;
-  const axes = [
-    { v: q[1], color: "#ef4444" }, // x — red
-    { v: q[2], color: "#22c55e" }, // y — green
-    { v: q[3], color: "#3b82f6" }, // z — blue
-  ];
-  return (
-    <div className="py-[2px] text-[11px]">
-      <div className="grid grid-cols-[90px_1fr] items-center gap-1.5">
-        <div style={{ color: accent }} className="truncate font-semibold">{tag}</div>
-        <svg viewBox="-100 -12 200 24" preserveAspectRatio="none" className="h-[18px] w-full">
-          <line x1={-100} y1={0} x2={100} y2={0} stroke="#e7e5e4" strokeWidth={0.4} />
-          <line x1={0} y1={-12} x2={0} y2={12} stroke="#d6d3d1" strokeWidth={0.6} />
-          {axes.map((a, i) => {
-            const w = Math.max(-100, Math.min(100, (a.v / BAR_MAX) * 100));
-            const y = -9 + i * 6;
-            return (
-              <rect key={i} x={Math.min(0, w)} y={y} width={Math.abs(w)} height={4}
-                fill={a.color} opacity={0.9} />
-            );
-          })}
-        </svg>
-      </div>
-      <div className="ml-[90px] font-mono text-[10.5px] text-[var(--muted)] whitespace-nowrap overflow-x-auto">
-        {fmtQuat(q)}
-      </div>
-    </div>
-  );
-}
-
-function SampleCard({
-  sample,
-  frames,
-  stats,
-  frameIndex,
-}: {
-  sample: Sample;
-  frames: V3[][];
-  stats: SampleStats;
-  frameIndex: number;
-}) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const trailsRef = useRef<Array<Array<[number, number]>>>([[], [], []]);
-  const [size, setSize] = useState(300);
-
-  // Responsive canvas size — track container width.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      for (const e of entries) {
-        const w = Math.max(180, Math.floor(e.contentRect.width));
-        setSize(w);
-      }
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Draw on frame change.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-    if (canvas.width !== Math.floor(size * dpr)) {
-      canvas.width = Math.floor(size * dpr);
-      canvas.height = Math.floor(size * dpr);
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const W = size, H = size;
-
-    ctx.fillStyle = "#fafaf9";
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.strokeStyle = "#e7e5e4";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(W / 2, 10); ctx.lineTo(W / 2, H - 10);
-    ctx.moveTo(10, H / 2); ctx.lineTo(W - 10, H / 2);
-    ctx.stroke();
-
-    const f = frameIndex % frames.length;
-    const sc = W * 0.22;
-    const pts = frames[f];
-    const proj = pts.map(p => ({
-      x: W / 2 + p[0] * sc,
-      y: H / 2 - p[1] * sc,
-      z: p[2],
-    }));
-
-    if (f === 0) trailsRef.current = [[], [], []];
-    proj.forEach((p, i) => {
-      trailsRef.current[i].push([p.x, p.y]);
-      if (trailsRef.current[i].length > frames.length) trailsRef.current[i].shift();
-    });
-    trailsRef.current.forEach((trail, i) => {
-      if (trail.length < 2) return;
-      ctx.strokeStyle = COLORS[i] + "40";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(trail[0][0], trail[0][1]);
-      for (let k = 1; k < trail.length; k++) ctx.lineTo(trail[k][0], trail[k][1]);
-      ctx.stroke();
-    });
-
-    ctx.strokeStyle = sample.deform ? "#d6d3d1" : "#525252";
-    ctx.lineWidth = sample.deform ? 1 : 1.5;
-    ctx.beginPath();
-    ctx.moveTo(proj[0].x, proj[0].y);
-    ctx.lineTo(proj[1].x, proj[1].y);
-    ctx.lineTo(proj[2].x, proj[2].y);
-    ctx.closePath();
-    ctx.stroke();
-
-    proj.forEach((p, i) => {
-      const sz = Math.max(2.5, W * 0.018 + p.z * 2.2);
-      ctx.fillStyle = COLORS[i];
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, sz, 0, Math.PI * 2);
-      ctx.fill();
-
-      // label letter next to point
-      ctx.fillStyle = COLORS[i];
-      ctx.font = `${Math.max(10, W * 0.04)}px ui-sans-serif, system-ui`;
-      ctx.fillText(POINT_LABELS[i], p.x + sz + 2, p.y - sz - 2);
-    });
-
-    ctx.fillStyle = "#a8a29e";
-    ctx.font = "11px ui-monospace, monospace";
-    ctx.fillText(`f${f.toString().padStart(3, "0")}/${frames.length}`, 6, H - 6);
-  }, [frames, frameIndex, sample.deform, size]);
-
-  // Per-point quaternions for current step (f -> fn) and the next step (fn -> fnn).
-  const f = frameIndex % frames.length;
-  const fn = (f + 1) % frames.length;
-  const fnn = (f + 2) % frames.length;
-  const qfA = useMemo(                                             // a  -> a'
-    () => perPointForwardQuats(frames[f], frames[fn]),
-    [frames, f, fn]
-  );
-  const qfB = useMemo(                                             // a' -> a''
-    () => perPointForwardQuats(frames[fn], frames[fnn]),
-    [frames, fn, fnn]
-  );
-  const qfDirect = useMemo(                                        // a  -> a''  direct
-    () => perPointForwardQuats(frames[f], frames[fnn]),
-    [frames, f, fnn]
-  );
-  // Composed: apply qfA then qfB.  In our convention q_total = qfB * qfA so
-  // that q_total acts on (a - c_t) to yield (a'' - c_{t+2}) via qB( qA( v ) ).
-  const qfComposed = useMemo(
-    () => qfA.map((qa, i) => quatNorm(quatMul(qfB[i], qa))),
-    [qfA, qfB]
-  );
-  // Transitivity error: angle between direct quat and the composed one.
-  const transErrDeg = useMemo(
-    () =>
-      qfDirect.map((qd, i) => {
-        // q_err = qfComposed * conj(qd)  -> angle from identity
-        const err = quatMul(qfComposed[i], quatConj(qd));
-        return quatAngleDeg(err);
-      }),
-    [qfDirect, qfComposed]
-  );
-  const qb = useMemo(() => qfA.map(quatConj), [qfA]);              // qb_a'a
-
-  // Global best-fit rotation (Kabsch over all 3 points) for step f -> fn.
-  const qBestStep = useMemo(() => kabschQuat(frames[f], frames[fn]), [frames, f, fn]);
-
-  // Per-point rigidity residuals: a' - (q_best · (a - c) + c')
-  const rigidity = useMemo(() => {
-    const cP = centroid(frames[f]);
-    const cQ = centroid(frames[fn]);
-    return frames[f].map((p, i) => {
-      const pred = add(quatRotate(qBestStep, sub(p, cP)), cQ);
-      return sub(frames[fn][i], pred);
-    });
-  }, [frames, f, fn, qBestStep]);
-
-  const angleStr = stats.cycleAngleDeg.toFixed(2);
-  const resStr = stats.meanResidual.toExponential(1);
-  const angleOk = stats.cycleAngleDeg < 1;
-
-  return (
-    <div className="flex flex-col gap-2 rounded border border-[var(--card-border)] bg-[var(--card)] p-2.5">
-      <div className="flex items-baseline justify-between">
-        <div className="text-sm font-semibold">{sample.name}</div>
-        <div
-          className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-            angleOk ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
-          }`}
-        >
-          cyc ∠ {angleStr}°
-        </div>
-      </div>
-      <div ref={wrapRef} className="w-full">
-        <canvas
-          ref={canvasRef}
-          style={{ width: "100%", height: size + "px", display: "block" }}
-          className="rounded border border-[var(--card-border)]"
-        />
-      </div>
-
-      {/* Per-point quaternions — numbers + bar graph of xyz */}
-      <div className="font-mono text-[10px] leading-[1.35] text-[var(--muted)]">
-        <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide">
-          <span>steps f{f}→f{fn}→f{fnn}</span>
-          <QuatAxisLegend />
-        </div>
-        {POINT_LABELS.map((lab, i) => {
-          const p1 = lab + "'";
-          const p2 = lab + "''";
-          const err = transErrDeg[i];
-          const errOk = err < 1;
-          const idA: Quat = quatNorm(quatMul(qfA[i], qb[i]));                        // q × q^* = id
-          const idB: Quat = quatNorm(quatMul(qfB[i], quatConj(qfB[i])));             // same for step B
-          const qbDirect: Quat = quatConj(qfDirect[i]);
-          const idD: Quat = quatNorm(quatMul(qfDirect[i], qbDirect));
-          const qBestQa: Quat = quatNorm(quatMul(qBestStep, qfA[i]));                 // q_best × qf_aa'
-          const rows: { tag: string; q: Quat }[] = [
-            { tag: `qf_${lab}${p1}`,             q: qfA[i] },
-            { tag: `qb_${p1}${lab}`,             q: qb[i] },
-            { tag: `qf${lab}${p1}·qb${p1}${lab}`, q: idA },
-            { tag: `qf_${p1}${p2}`,              q: qfB[i] },
-            { tag: `qb_${p2}${p1}`,              q: quatConj(qfB[i]) },
-            { tag: `qf${p1}${p2}·qb${p2}${p1}`,  q: idB },
-            { tag: `qf_${lab}${p2}`,             q: qfDirect[i] },
-            { tag: `qb_${p2}${lab}`,             q: qbDirect },
-            { tag: `qf${lab}${p2}·qb${p2}${lab}`, q: idD },
-            { tag: `qfB∘qfA`,                    q: qfComposed[i] },
-            { tag: `q_best(→')`,                 q: qBestStep },
-            { tag: `q_best·qf_${lab}${p1}`,      q: qBestQa },
-          ];
-          const chartLabels = [
-            `qf_${lab}${p1}`,
-            `qb_${p1}${lab}`,
-            `qf${lab}${p1}·qb`,
-            `qf_${p1}${p2}`,
-            `qb_${p2}${p1}`,
-            `qf${p1}${p2}·qb`,
-            `qf_${lab}${p2}`,
-            `qb_${p2}${lab}`,
-            `qf${lab}${p2}·qb`,
-            `qfB∘qfA`,
-            `q_best`,
-            `q_best·qf`,
-          ];
-          const chartQuats = [
-            qfA[i], qb[i], idA,
-            qfB[i], quatConj(qfB[i]), idB,
-            qfDirect[i], qbDirect, idD,
-            qfComposed[i],
-            qBestStep, qBestQa,
-          ];
-          return (
-            <div key={lab} className="mb-1 rounded border border-[var(--card-border)] px-1 py-0.5">
-              {rows.map(r => (
-                <QuatRow key={r.tag} tag={r.tag} q={r.q} accent={COLORS[i]} />
-              ))}
-              <div className="mt-1">
-                <QuatLineChart
-                  pointLabel={lab}
-                  accent={COLORS[i]}
-                  labels={chartLabels}
-                  quats={chartQuats}
-                />
-              </div>
-              <div className={`mt-0.5 font-mono text-[10px] ${errOk ? "text-emerald-600" : "text-red-600"}`}>
-                trans ∠ {err.toFixed(2)}°
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Rigidity residuals vs global q_best */}
-      <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-2">
-        <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-[var(--muted)]">
-          <span>rigidity residuals</span>
-          <QuatAxisLegend />
-        </div>
-        <div className="mb-1">
-          <QuatRow tag="q_best(all)" q={qBestStep} accent="#78716c" />
-        </div>
-        <div className="space-y-0.5">
-          {POINT_LABELS.map((lab, i) => (
-            <RigidityRow
-              key={lab}
-              label={`‖res_${lab}‖`}
-              accent={COLORS[i]}
-              residual={rigidity[i]}
-              max={0.15}
-            />
-          ))}
-        </div>
-        <div className="mt-1 text-[9.5px] text-[var(--muted)]">
-          residual<sub>i</sub> = p<sub>i</sub>&apos; − (q_best·(p<sub>i</sub>−c) + c&apos;); rigid ⇒ ‖·‖ ≈ 0
-        </div>
-      </div>
-
-      <div className="font-mono text-[10px] text-[var(--muted)]">
-        mean resid {resStr}
-      </div>
-    </div>
-  );
-}
-
-/* -------- small-angle demo -------- */
-
-function quatFromAxisAngleDeg(axis: V3, deg: number): Quat {
-  const a = (deg * Math.PI) / 180;
-  const h = a / 2;
-  const s = Math.sin(h);
-  const n = normalize(axis);
-  return [Math.cos(h), n[0] * s, n[1] * s, n[2] * s];
-}
-
-function quatRotateVec(q: Quat, v: V3): V3 {
-  return quatRotate(q, v);
-}
-
-function SmallAngleDemo() {
-  // Two rotations: q_a around X, q_b around Y. Compare compose vs vector-add.
-  const [angA, setAngA] = useState(10);
-  const [angB, setAngB] = useState(10);
-
-  const qA = useMemo(() => quatFromAxisAngleDeg([1, 0, 0], angA), [angA]);
-  const qB = useMemo(() => quatFromAxisAngleDeg([0, 1, 0], angB), [angB]);
-  const qCompose = useMemo(() => quatNorm(quatMul(qB, qA)), [qA, qB]);
-  // Vector-add approximation: sum vector parts, w = 1, normalize.
-  const qAdd = useMemo(
-    () => quatNorm([1, qA[1] + qB[1], qA[2] + qB[2], qA[3] + qB[3]]),
-    [qA, qB]
-  );
-  const errDeg = useMemo(() => {
-    const err = quatMul(qCompose, quatConj(qAdd));
-    return quatAngleDeg(err);
-  }, [qCompose, qAdd]);
-
-  // Visualize: rotate ref vector (0, 0, 1) by both, project to 2D (XY plane).
-  const refVec: V3 = [0, 0, 1];
-  const vCompose = useMemo(() => quatRotateVec(qCompose, refVec), [qCompose]);
-  const vAdd = useMemo(() => quatRotateVec(qAdd, refVec), [qAdd]);
-
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const [cw, setCw] = useState(300);
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      for (const e of entries) setCw(Math.max(180, Math.floor(e.contentRect.width)));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-    const size = cw;
-    if (canvas.width !== Math.floor(size * dpr)) {
-      canvas.width = Math.floor(size * dpr);
-      canvas.height = Math.floor(size * dpr);
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const W = size, H = size;
-    ctx.fillStyle = "#fafaf9";
-    ctx.fillRect(0, 0, W, H);
-
-    // Draw unit-sphere equator (circle) for reference
-    ctx.strokeStyle = "#e7e5e4";
-    ctx.lineWidth = 1;
-    const cx = W / 2, cy = H / 2, R = Math.min(W, H) * 0.38;
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, 0, Math.PI * 2);
-    ctx.stroke();
-    // Axes
-    ctx.beginPath();
-    ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy);
-    ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
-    ctx.stroke();
-
-    // Ref vector start (at (0,0)+size marker)
-    const proj = (v: V3) => ({
-      x: cx + v[0] * R,
-      y: cy - v[1] * R,
-      z: v[2],
-    });
-
-    const pStart = proj(refVec);
-    const pC = proj(vCompose);
-    const pA = proj(vAdd);
-
-    // Arrows from start to endpoints (xy projection)
-    const arrow = (to: { x: number; y: number; z: number }, color: string) => {
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(pStart.x, pStart.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-      // head
-      ctx.beginPath();
-      ctx.arc(to.x, to.y, Math.max(3, 1.5 + Math.abs(to.z) * 3), 0, Math.PI * 2);
-      ctx.fill();
-    };
-
-    // Draw start point
-    ctx.fillStyle = "#78716c";
-    ctx.beginPath();
-    ctx.arc(pStart.x, pStart.y, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#78716c";
-    ctx.font = `${Math.max(10, W * 0.035)}px ui-sans-serif, system-ui`;
-    ctx.fillText("start (0,0,1)", pStart.x + 6, pStart.y - 6);
-
-    arrow(pC, "#2563eb"); // compose — blue
-    arrow(pA, "#f97316"); // add — orange
-
-    ctx.fillStyle = "#2563eb";
-    ctx.fillText("compose (q_b·q_a)", 10, 18);
-    ctx.fillStyle = "#f97316";
-    ctx.fillText("add (vec sum)", 10, 34);
-  }, [cw, vCompose, vAdd]);
-
-  const okSmall = errDeg < 1;
-
-  return (
-    <section className="mt-6 rounded border border-[var(--card-border)] bg-[var(--card)] p-3">
-      <div className="mb-2 text-sm font-semibold">Small-angle: add vs multiply</div>
-      <p className="mb-3 text-[11px] text-[var(--muted)]">
-        q<sub>a</sub> = rotation around <span className="font-mono">x</span> by θ<sub>a</sub>,
-        q<sub>b</sub> = around <span className="font-mono">y</span> by θ<sub>b</sub>.
-        Compare true composition q<sub>b</sub>·q<sub>a</sub> with vector-add
-        (1, x<sub>a</sub>+x<sub>b</sub>, y<sub>a</sub>+y<sub>b</sub>, z<sub>a</sub>+z<sub>b</sub>) then normalized.
-      </p>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div className="space-y-3">
-          <div>
-            <label className="block text-[11px] text-[var(--muted)]">
-              θ<sub>a</sub> (around x): <span className="font-mono">{angA.toFixed(0)}°</span>
-            </label>
-            <input
-              type="range" min={0} max={180} step={1}
-              value={angA}
-              onChange={e => setAngA(parseFloat(e.target.value))}
-              className="mt-1 w-full accent-[var(--foreground)]"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] text-[var(--muted)]">
-              θ<sub>b</sub> (around y): <span className="font-mono">{angB.toFixed(0)}°</span>
-            </label>
-            <input
-              type="range" min={0} max={180} step={1}
-              value={angB}
-              onChange={e => setAngB(parseFloat(e.target.value))}
-              className="mt-1 w-full accent-[var(--foreground)]"
-            />
-          </div>
-          <div className="font-mono text-[11px] leading-[1.5] text-[var(--muted)]">
-            <div>q<sub>a</sub>  = {fmtQuat(qA)}</div>
-            <div>q<sub>b</sub>  = {fmtQuat(qB)}</div>
-            <div className="text-[#2563eb]">compose = {fmtQuat(qCompose)}</div>
-            <div className="text-[#f97316]">add     = {fmtQuat(qAdd)}</div>
-          </div>
-          <div
-            className={`inline-block rounded px-2 py-1 font-mono text-xs ${
-              okSmall ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
-            }`}
-          >
-            Δ angle between compose &amp; add: {errDeg.toFixed(2)}°
-          </div>
-          <div className="text-[11px] leading-relaxed text-[var(--muted)]">
-            When both θ are small (≲10°), Δ ≈ 0. As θ grows, the error grows
-            quadratically. Above ~45° the two diverge visibly.
-          </div>
-        </div>
-        <div ref={wrapRef} className="w-full">
-          <canvas
-            ref={canvasRef}
-            style={{ width: "100%", height: cw + "px", display: "block" }}
-            className="rounded border border-[var(--card-border)]"
-          />
-          <div className="mt-1 text-[10px] text-[var(--muted)]">
-            Endpoints of rotating (0, 0, 1) by compose (blue) vs add (orange).
-            Projected to the XY plane.
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/* -------- real (Hungarian) sample card -------- */
-
-type RealClass = { classId: number; frames: number[][][] };        // frames[T][P][3]
-type RealData = { P: number; T: number; classes: RealClass[] };
-
-function aggregateQuats(P: V3[], Q: V3[]): {
-  perPoint: Quat[];
-  mean: Quat;
-} {
-  const cP = centroid(P);
-  const cQ = centroid(Q);
-  const qs = P.map((p, i) => quatFromVectors(sub(p, cP), sub(Q[i], cQ)));
-  // "Mean quaternion" via chordal mean then renormalize (OK when spread small).
-  const acc: Quat = [0, 0, 0, 0];
-  for (const q of qs) {
-    // Fix sign to the first quat's hemisphere to avoid antipodal cancellation.
-    const sign = qs[0][0] * q[0] + qs[0][1] * q[1] + qs[0][2] * q[2] + qs[0][3] * q[3] >= 0 ? 1 : -1;
-    acc[0] += sign * q[0]; acc[1] += sign * q[1]; acc[2] += sign * q[2]; acc[3] += sign * q[3];
-  }
-  const m = quatNorm([acc[0] / qs.length, acc[1] / qs.length, acc[2] / qs.length, acc[3] / qs.length]);
-  return { perPoint: qs, mean: m };
-}
-
-function statsBand(values: number[]): { mean: number; lo: number; hi: number } {
-  if (!values.length) return { mean: 0, lo: 0, hi: 0 };
-  let s = 0;
-  for (const v of values) s += v;
-  const mean = s / values.length;
-  let sq = 0;
-  for (const v of values) sq += (v - mean) * (v - mean);
-  const std = Math.sqrt(sq / values.length);
-  return { mean, lo: mean - std, hi: mean + std };
-}
-
-/** Line chart overlaying mean±std bands for x/y/z components across all P points. */
-function QuatBandChart({
-  labels,
-  quatsPerPoint,
-  max = 0.35,
-}: {
-  labels: string[];
-  quatsPerPoint: Quat[][];   // [quatIdx][pointIdx] -> Quat
-  max?: number;
-}) {
-  const W = 300;
-  const H = 130;
-  const PAD_L = 28;
-  const PAD_R = 8;
-  const PAD_T = 8;
-  const PAD_B = 22;
-  const innerW = W - PAD_L - PAD_R;
-  const innerH = H - PAD_T - PAD_B;
-  const n = labels.length;
-  const xAt = (i: number) => PAD_L + (n === 1 ? innerW / 2 : (innerW * i) / (n - 1));
-  const yAt = (v: number) =>
-    PAD_T + innerH / 2 - (Math.max(-max, Math.min(max, v)) / max) * (innerH / 2);
-
-  const series = [
-    { key: "x", color: "#ef4444", idx: 1 },
-    { key: "y", color: "#22c55e", idx: 2 },
-    { key: "z", color: "#3b82f6", idx: 3 },
-  ];
-
-  // For each quaternion position, gather component values across points.
-  const bands = series.map(s => {
-    return quatsPerPoint.map(qs => statsBand(qs.map(q => q[s.idx])));
-  });
-
-  const ticks = [-max, -max / 2, 0, max / 2, max];
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="w-full">
-      {ticks.map((t, i) => (
-        <g key={i}>
-          <line x1={PAD_L} y1={yAt(t)} x2={W - PAD_R} y2={yAt(t)}
-            stroke={t === 0 ? "#d6d3d1" : "#f0efed"}
-            strokeWidth={t === 0 ? 0.6 : 0.4} />
-          <text x={PAD_L - 3} y={yAt(t) + 3} fontSize={8} fill="#a8a29e" textAnchor="end">
-            {t === 0 ? "0" : t.toFixed(2)}
-          </text>
-        </g>
-      ))}
-      {labels.map((lab, i) => (
-        <text key={i} x={xAt(i)} y={H - 6} fontSize={7.5} fill="#78716c" textAnchor="middle">{lab}</text>
-      ))}
-      {series.map((s, si) => {
-        // Band polygon: hi values forward, lo values reverse.
-        const hi = bands[si].map((b, i) => `${xAt(i).toFixed(1)},${yAt(b.hi).toFixed(1)}`);
-        const lo = bands[si].slice().reverse().map((b, i) => {
-          const idx = bands[si].length - 1 - i;
-          return `${xAt(idx).toFixed(1)},${yAt(b.lo).toFixed(1)}`;
-        });
-        const poly = hi.concat(lo).join(" ");
-        const meanPath = bands[si]
-          .map((b, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(b.mean).toFixed(1)}`)
-          .join(" ");
-        return (
-          <g key={s.key}>
-            <polygon points={poly} fill={s.color} opacity={0.12} />
-            <path d={meanPath} fill="none" stroke={s.color} strokeWidth={1.3} />
-            {bands[si].map((b, i) => (
-              <circle key={i} cx={xAt(i)} cy={yAt(b.mean)} r={1.5} fill={s.color} />
-            ))}
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-/** Compact residual row: label + xyz bars of residual vector + scalar magnitude. */
-function RigidityRow({
-  label,
-  accent,
-  residual,
-  max = 0.15,
-}: {
-  label: string;
-  accent: string;
-  residual: V3;
-  max?: number;
-}) {
-  const mag = Math.hypot(residual[0], residual[1], residual[2]);
-  const ok = mag < max * 0.5;
-  const axes = [
-    { v: residual[0], color: "#ef4444" },
-    { v: residual[1], color: "#22c55e" },
-    { v: residual[2], color: "#3b82f6" },
-  ];
-  return (
-    <div className="py-[2px] text-[11px]">
-      <div className="grid grid-cols-[90px_1fr_64px] items-center gap-1.5">
-        <div style={{ color: accent }} className="truncate font-semibold">{label}</div>
-        <svg viewBox="-100 -12 200 24" preserveAspectRatio="none" className="h-[18px] w-full">
-          <line x1={-100} y1={0} x2={100} y2={0} stroke="#e7e5e4" strokeWidth={0.4} />
-          <line x1={0} y1={-12} x2={0} y2={12} stroke="#d6d3d1" strokeWidth={0.6} />
-          {axes.map((a, i) => {
-            const w = Math.max(-100, Math.min(100, (a.v / max) * 100));
-            const y = -9 + i * 6;
-            return (
-              <rect key={i} x={Math.min(0, w)} y={y} width={Math.abs(w)} height={4}
-                fill={a.color} opacity={0.9} />
-            );
-          })}
-        </svg>
-        <div
-          className={`rounded px-1 py-0.5 text-right font-mono text-[10px] ${
-            ok ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
-          }`}
-        >
-          {mag.toFixed(3)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Row per point, shows summary; click to expand full 5-quat detail. */
-function RealPointRow({
-  label,
-  accent,
-  transDeg,
-  quats,
-  labels,
-}: {
-  label: string;
-  accent: string;
-  transDeg: number;
-  quats: Quat[];        // 5 entries
-  labels: string[];     // 5 entries
-}) {
-  const [open, setOpen] = useState(false);
-  const errOk = transDeg < 2;
-  return (
-    <div className="rounded border border-[var(--card-border)]">
-      <button
-        onClick={() => setOpen(v => !v)}
-        className="flex w-full items-center gap-2 px-1.5 py-0.5 text-left hover:bg-[var(--card)]"
-      >
-        <div style={{ color: accent }} className="w-12 font-mono text-[10px] font-semibold">
-          {label}
-        </div>
-        <div
-          className={`rounded px-1 py-0.5 font-mono text-[10px] ${
-            errOk ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
-          }`}
-        >
-          ∠{transDeg.toFixed(2)}°
-        </div>
-        {/* Mini per-quat xyz bars inline (n = quats.length) */}
-        <svg viewBox="0 0 200 14" preserveAspectRatio="none" className="h-3 flex-1">
-          {quats.map((q, i) => {
-            const n = quats.length;
-            const x = (i / n) * 200;
-            const cw = 200 / n - 1;
-            const mid = x + cw / 2;
-            const bh = 4;
-            const scale = (v: number) => Math.max(-1, Math.min(1, v / 0.35));
-            return (
-              <g key={i}>
-                <line x1={x} y1={7} x2={x + cw} y2={7} stroke="#f0efed" strokeWidth={0.4} />
-                <line x1={mid} y1={1} x2={mid} y2={13} stroke="#e7e5e4" strokeWidth={0.4} />
-                {[q[1], q[2], q[3]].map((val, j) => {
-                  const colors = ["#ef4444", "#22c55e", "#3b82f6"];
-                  const w = scale(val) * (cw / 2);
-                  const yy = 2 + j * bh;
-                  return (
-                    <rect key={j}
-                      x={w >= 0 ? mid : mid + w}
-                      y={yy}
-                      width={Math.max(0.5, Math.abs(w))}
-                      height={bh - 1}
-                      fill={colors[j]}
-                      opacity={0.85}
-                    />
-                  );
-                })}
-              </g>
-            );
-          })}
-        </svg>
-        <span className="text-[10px] text-[var(--muted)]">{open ? "−" : "+"}</span>
-      </button>
-      {open && (
-        <div className="border-t border-[var(--card-border)] px-1 py-1">
-          {quats.map((q, i) => (
-            <QuatRow key={labels[i]} tag={labels[i]} q={q} accent={accent} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RealSampleCard({
-  classId,
-  frames,
-  frameIndex,
-}: {
-  classId: number;
-  frames: V3[][];
-  frameIndex: number;
-}) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [size, setSize] = useState(300);
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => {
-      for (const e of entries) setSize(Math.max(180, Math.floor(e.contentRect.width)));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Draw current frame.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-    if (canvas.width !== Math.floor(size * dpr)) {
-      canvas.width = Math.floor(size * dpr);
-      canvas.height = Math.floor(size * dpr);
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const W = size, H = size;
-    ctx.fillStyle = "#fafaf9";
-    ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = "#e7e5e4";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(W / 2, 10); ctx.lineTo(W / 2, H - 10);
-    ctx.moveTo(10, H / 2); ctx.lineTo(W - 10, H / 2);
-    ctx.stroke();
-
-    const f = frameIndex % frames.length;
-    const sc = W * 0.32;
-    const pts = frames[f];
-
-    // Light fading trail: overlay previous frame positions faint
-    const trailFrames = 6;
-    for (let k = 1; k <= trailFrames; k++) {
-      const tf = frames[(f - k + frames.length) % frames.length];
-      const alpha = ((trailFrames - k + 1) / trailFrames) * 0.15;
-      ctx.fillStyle = `rgba(120, 113, 108, ${alpha})`;
-      for (const p of tf) {
-        ctx.beginPath();
-        ctx.arc(W / 2 + p[0] * sc, H / 2 - p[1] * sc, 1.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    for (let i = 0; i < pts.length; i++) {
-      const [x, y, z] = pts[i];
-      const px = W / 2 + x * sc;
-      const py = H / 2 - y * sc;
-      const sz = Math.max(1.5, 2 + z * 2);
-      // Per-point color by angle around origin (hue cue).
-      const hue = ((Math.atan2(y, x) + Math.PI) / (2 * Math.PI)) * 360;
-      ctx.fillStyle = `hsl(${hue.toFixed(0)}, 65%, 55%)`;
-      ctx.beginPath();
-      ctx.arc(px, py, sz, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.fillStyle = "#a8a29e";
-    ctx.font = "11px ui-monospace, monospace";
-    ctx.fillText(`f${f.toString().padStart(2, "0")}/${frames.length}`, 6, H - 6);
-  }, [frames, frameIndex, size]);
-
-  // Current triplet frames (f, fn, fnn) per-point quat tables.
-  const T = frames.length;
-  const f = frameIndex % T;
-  const fn = (f + 1) % T;
-  const fnn = (f + 2) % T;
-
-  const { perPoint: qfA, mean: qfAmean } = useMemo(
-    () => aggregateQuats(frames[f], frames[fn]),
-    [frames, f, fn]
-  );
-  const { perPoint: qfB, mean: qfBmean } = useMemo(
-    () => aggregateQuats(frames[fn], frames[fnn]),
-    [frames, fn, fnn]
-  );
-  const { perPoint: qfDirect, mean: qfDmean } = useMemo(
-    () => aggregateQuats(frames[f], frames[fnn]),
-    [frames, f, fnn]
-  );
-  const qb = useMemo(() => qfA.map(quatConj), [qfA]);
-  const qbMean = useMemo(() => quatConj(qfAmean), [qfAmean]);
-  const qfComposed = useMemo(
-    () => qfA.map((qa, i) => quatNorm(quatMul(qfB[i], qa))),
-    [qfA, qfB]
-  );
-  const qfComposedMean = useMemo(() => quatNorm(quatMul(qfBmean, qfAmean)), [qfAmean, qfBmean]);
-  const transDeg = useMemo(
-    () =>
-      qfDirect.map((qd, i) => {
-        const err = quatMul(qfComposed[i], quatConj(qd));
-        return quatAngleDeg(err);
-      }),
-    [qfDirect, qfComposed]
-  );
-  const transStats = useMemo(() => statsBand(transDeg), [transDeg]);
-
-  // Identity-check products: qf · qb = (1,0,0,0) by construction.
-  const idA = useMemo(() => qfA.map((q, i) => quatNorm(quatMul(q, qb[i]))), [qfA, qb]);
-  const qbB = useMemo(() => qfB.map(quatConj), [qfB]);
-  const idB = useMemo(() => qfB.map((q, i) => quatNorm(quatMul(q, qbB[i]))), [qfB, qbB]);
-  const qbDirect = useMemo(() => qfDirect.map(quatConj), [qfDirect]);
-  const idD = useMemo(
-    () => qfDirect.map((q, i) => quatNorm(quatMul(q, qbDirect[i]))),
-    [qfDirect, qbDirect]
-  );
-  // Global best-fit rotation over all P points (Kabsch f -> fn), and per-point compose.
-  const qBestStep = useMemo(() => kabschQuat(frames[f], frames[fn]), [frames, f, fn]);
-  const qBestQa = useMemo(
-    () => qfA.map(q => quatNorm(quatMul(qBestStep, q))),
-    [qBestStep, qfA]
-  );
-  const qBestBroadcast: Quat[] = useMemo(() => qfA.map(() => qBestStep), [qfA, qBestStep]);
-
-  // Per-point rigidity residuals against global q_best.
-  const rigidity = useMemo(() => {
-    const cP = centroid(frames[f]);
-    const cQ = centroid(frames[fn]);
-    return frames[f].map((p, i) => {
-      const pred = add(quatRotate(qBestStep, sub(p, cP)), cQ);
-      return sub(frames[fn][i], pred);
-    });
-  }, [frames, f, fn, qBestStep]);
-  const rigidityMags = useMemo(() => rigidity.map(r => Math.hypot(r[0], r[1], r[2])), [rigidity]);
-  const rigidityStats = useMemo(() => statsBand(rigidityMags), [rigidityMags]);
-
-  const labels = [
-    "qf_aa'", "qb_a'a", "qfaa'·qba'a",
-    "qf_a'a''", "qb_a''a'", "qfa'a''·qba''a'",
-    "qf_aa''", "qb_a''a", "qfaa''·qba''a",
-    "qfB∘qfA",
-    "q_best(→')", "q_best·qfaa'",
-  ];
-  const quatsPerPoint: Quat[][] = [
-    qfA, qb, idA,
-    qfB, qbB, idB,
-    qfDirect, qbDirect, idD,
-    qfComposed,
-    qBestBroadcast, qBestQa,
-  ];
-  const meanId: Quat = [1, 0, 0, 0];
-  const meanQuats: Quat[] = [
-    qfAmean, qbMean, meanId,
-    qfBmean, quatConj(qfBmean), meanId,
-    qfDmean, quatConj(qfDmean), meanId,
-    qfComposedMean,
-    qBestStep, quatNorm(quatMul(qBestStep, qfAmean)),
-  ];
-
-  return (
-    <div className="flex flex-col gap-2 rounded border border-[var(--card-border)] bg-[var(--card)] p-2.5">
-      <div className="flex items-baseline justify-between">
-        <div className="text-sm font-semibold">class {String(classId + 1).padStart(2, "0")}</div>
-        <div
-          className={`rounded px-1.5 py-0.5 font-mono text-[10px] ${
-            transStats.mean < 2 ? "bg-emerald-500/10 text-emerald-600" : "bg-red-500/10 text-red-600"
-          }`}
-        >
-          trans μ {transStats.mean.toFixed(2)}° ±{(transStats.hi - transStats.mean).toFixed(2)}
-        </div>
-      </div>
-      <div ref={wrapRef} className="w-full">
-        <canvas
-          ref={canvasRef}
-          style={{ width: "100%", height: size + "px", display: "block" }}
-          className="rounded border border-[var(--card-border)]"
-        />
-      </div>
-
-      <div className="font-mono text-[10px] leading-[1.35] text-[var(--muted)]">
-        <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide">
-          <span>P={quatsPerPoint[0].length} · steps f{f}→f{fn}→f{fnn}</span>
-          <QuatAxisLegend />
-        </div>
-
-        {/* Mean quaternion bar-rows */}
-        <div className="mb-2">
-          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide">mean over all points</div>
-          {labels.map((lab, i) => (
-            <QuatRow key={lab} tag={lab} q={meanQuats[i]} accent="#78716c" />
-          ))}
-        </div>
-
-        <div className="mb-2">
-          <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide">distribution (mean ± std)</div>
-          <QuatBandChart labels={labels} quatsPerPoint={quatsPerPoint} />
-        </div>
-
-        <div>
-          <div className="mb-0.5 flex items-center gap-2 text-[10px]">
-            <span className="font-semibold uppercase tracking-wide">per-point quaternions</span>
-            <span className="text-[10px]">(click row to expand)</span>
-          </div>
-          <div className="max-h-[320px] space-y-0.5 overflow-y-auto pr-1">
-            {qfA.map((_, idx) => {
-              const pointQuats = [
-                qfA[idx], qb[idx], idA[idx],
-                qfB[idx], qbB[idx], idB[idx],
-                qfDirect[idx], qbDirect[idx], idD[idx],
-                qfComposed[idx],
-                qBestStep, qBestQa[idx],
-              ];
-              return (
-                <RealPointRow
-                  key={idx}
-                  label={`p${idx + 1}`}
-                  accent={idx % 2 === 0 ? "#1f2937" : "#0f172a"}
-                  transDeg={transDeg[idx]}
-                  quats={pointQuats}
-                  labels={labels}
-                />
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Rigidity residuals */}
-        <div className="mt-3 rounded border border-[var(--card-border)] bg-[var(--card)] p-2">
-          <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-[var(--muted)]">
-            <span>
-              rigidity residuals · μ {rigidityStats.mean.toFixed(3)} ±{(rigidityStats.hi - rigidityStats.mean).toFixed(3)}
-            </span>
-            <QuatAxisLegend />
-          </div>
-          <div className="mb-1">
-            <QuatRow tag="q_best(all)" q={qBestStep} accent="#78716c" />
-          </div>
-          <div className="max-h-[320px] space-y-0.5 overflow-y-auto pr-1">
-            {rigidity.map((r, idx) => (
-              <RigidityRow
-                key={idx}
-                label={`‖res_p${idx + 1}‖`}
-                accent={idx % 2 === 0 ? "#1f2937" : "#0f172a"}
-                residual={r}
-                max={0.15}
-              />
-            ))}
-          </div>
-          <div className="mt-1 text-[9.5px] text-[var(--muted)]">
-            residual<sub>i</sub> = p<sub>i</sub>&apos; − (q_best·(p<sub>i</sub>−c) + c&apos;); rigid ⇒ ‖·‖ ≈ 0
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* -------- page -------- */
-
-type View = "synth" | "real";
-
-const N_OPTIONS = [16, 32, 64, 128] as const;
-const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4] as const;
-
-export default function Home() {
-  const [view, setView] = useState<View>("synth");
-  const [N, setN] = useState<(typeof N_OPTIONS)[number]>(64);
-  const [totalRotTurns, setTotalRotTurns] = useState(1);
-  const [deformAmp, setDeformAmp] = useState(0.35);
-  const [speed, setSpeed] = useState<(typeof SPEED_OPTIONS)[number]>(1);
+export default function Page() {
+  const [data, setData] = useState<Payload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sampleIdx, setSampleIdx] = useState(0);
+  const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(true);
-  const [frameIndex, setFrameIndex] = useState(0);
+  const [fps, setFps] = useState(8);
+  const [numPoints, setNumPoints] = useState(128);
+  const [yaw, setYaw] = useState(0.5);
+  const [pitch, setPitch] = useState(-0.25);
+  const [showGlyph, setShowGlyph] = useState(true);
+  const [glyphScale, setGlyphScale] = useState(0.08);
+  const [velScale, setVelScale] = useState(2.0);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [showBox, setShowBox] = useState(true);
+  const [showPoints, setShowPoints] = useState(true);
+  const [showLabels, setShowLabels] = useState(true);
+  const [showVolume, setShowVolume] = useState(false);
+  const [voxelRes, setVoxelRes] = useState(12);
+  const [showLattice, setShowLattice] = useState(false);
+  const [latticeCount, setLatticeCount] = useState(512);
+  const [panelOpen, setPanelOpen] = useState(true);
 
-  // Real-data JSON, fetched on demand.
-  const [realData, setRealData] = useState<RealData | null>(null);
-  const [realError, setRealError] = useState<string | null>(null);
-  useEffect(() => {
-    if (view !== "real" || realData) return;
-    fetch("/hungarian_samples.json")
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data: RealData) => {
-        setRealData(data);
-        setRealError(null);
-      })
-      .catch(err => setRealError(String(err)));
-  }, [view, realData]);
-
-  const totalRotRad = totalRotTurns * 2 * Math.PI;
-
-  const datasets = useMemo(() => {
-    return SAMPLES.map(s => {
-      const frames = generateFrames(s, N, totalRotRad, deformAmp);
-      const stats = computeSampleStats(frames);
-      return { sample: s, frames, stats };
-    });
-  }, [N, totalRotRad, deformAmp]);
-
-  // Active T for the animation clock depends on the view.
-  const activeT = view === "real" ? (realData?.T ?? 32) : N;
-
-  // Animation
-  const rafRef = useRef<number>(0);
-  const lastTsRef = useRef<number | null>(null);
-  const accumRef = useRef(0);
-  const advance = useCallback((ts: number) => {
-    if (lastTsRef.current == null) lastTsRef.current = ts;
-    const dt = (ts - lastTsRef.current) / 1000;
-    lastTsRef.current = ts;
-    accumRef.current += dt * 12 * speed;
-    while (accumRef.current >= 1) {
-      accumRef.current -= 1;
-      setFrameIndex(f => (f + 1) % activeT);
-    }
-    if (playing) rafRef.current = requestAnimationFrame(advance);
-  }, [playing, speed, activeT]);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dragging = useRef<{ x: number; y: number; yaw: number; pitch: number } | null>(null);
+  const panning = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const touchState = useRef<{
+    mode: "rotate" | "pinch";
+    x: number; y: number;
+    yaw: number; pitch: number;
+    panX: number; panY: number;
+    dist: number; zoom: number;
+  } | null>(null);
+  const [, forceTick] = useState(0);
 
   useEffect(() => {
-    if (!playing) {
-      cancelAnimationFrame(rafRef.current);
-      lastTsRef.current = null;
-      return;
+    const onResize = () => forceTick(t => t + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  useEffect(() => {
+    fetch("/class3_viz.json")
+      .then(r => r.json())
+      .then(setData)
+      .catch(e => setError(String(e)));
+  }, []);
+
+  const sample = useMemo(() => data?.samples_c3[sampleIdx] ?? null, [data, sampleIdx]);
+  const T = data?.frames ?? 0;
+  const dataPoints = data?.points ?? 0;
+
+  // bounding box over all frames, all points
+  const bbox = useMemo(() => {
+    if (!sample) return null;
+    let xmin = Infinity, ymin = Infinity, zmin = Infinity;
+    let xmax = -Infinity, ymax = -Infinity, zmax = -Infinity;
+    for (const f of sample.pts_q1000) {
+      for (const [x, y, z] of f) {
+        if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+        if (z < zmin) zmin = z; if (z > zmax) zmax = z;
+      }
     }
-    rafRef.current = requestAnimationFrame(advance);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [playing, advance]);
+    return {
+      xmin: xmin / 1000, ymin: ymin / 1000, zmin: zmin / 1000,
+      xmax: xmax / 1000, ymax: ymax / 1000, zmax: zmax / 1000,
+    };
+  }, [sample]);
 
-  return (
-    <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)]">
-      <header className="sticky top-0 z-40 border-b border-[var(--card-border)] bg-[var(--background)]/95 backdrop-blur">
-        <div className="mx-auto max-w-5xl px-3 py-2 sm:px-5">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="truncate text-sm font-semibold sm:text-base">
-              QCC viz: quaternion cycle consistency
-            </h1>
-            <button
-              onClick={() => setPlaying(p => !p)}
-              className="shrink-0 rounded border border-[var(--card-border)] px-3 py-1.5 text-xs hover:bg-[var(--card)]"
-            >
-              {playing ? "⏸ pause" : "▶ play"}
-            </button>
-          </div>
-          {/* View tabs */}
-          <div className="mt-1 flex gap-1">
-            {(["synth", "real"] as View[]).map(v => (
-              <button
-                key={v}
-                onClick={() => { setView(v); setFrameIndex(0); }}
-                className={`rounded px-3 py-1 text-xs ${
-                  v === view
-                    ? "bg-[var(--foreground)] text-[var(--background)]"
-                    : "border border-[var(--card-border)] hover:bg-[var(--card)]"
-                }`}
-              >
-                {v === "synth" ? "Synthetic 3-pt" : "Real (Hungarian)"}
-              </button>
-            ))}
-          </div>
-        </div>
-      </header>
+  // canonical lattice: 512 Halton(2,3,5) samples in canonical cube [-1,1]^3.
+  // index #i is fixed forever; per-frame world position warps via that
+  // frame's bbox so the lattice tracks the volume while preserving
+  // correspondence.
+  const canonicalLattice = useMemo(() => {
+    const pts: [number, number, number][] = [];
+    for (let i = 1; i <= 512; i++) {
+      pts.push([
+        2 * halton(i, 2) - 1,
+        2 * halton(i, 3) - 1,
+        2 * halton(i, 5) - 1,
+      ]);
+    }
+    return pts;
+  }, []);
 
-      <main className="mx-auto max-w-5xl px-3 py-4 sm:px-5">
-        {view === "real" ? (
-          <RealView realData={realData} realError={realError} frameIndex={frameIndex} />
-        ) : (
-          <SynthView
-            N={N} setN={setN}
-            totalRotTurns={totalRotTurns} setTotalRotTurns={setTotalRotTurns}
-            deformAmp={deformAmp} setDeformAmp={setDeformAmp}
-            speed={speed} setSpeed={setSpeed}
-            setFrameIndex={setFrameIndex}
-            datasets={datasets}
-            frameIndex={frameIndex}
-          />
-        )}
-      </main>
+  // per-frame bbox of raw points → coarse warp target
+  const perFrameBboxes = useMemo(() => {
+    if (!sample) return null;
+    const bbs: { cx: number; cy: number; cz: number; hx: number; hy: number; hz: number }[] = [];
+    for (const fpts of sample.pts_q1000) {
+      let xmin = Infinity, ymin = Infinity, zmin = Infinity;
+      let xmax = -Infinity, ymax = -Infinity, zmax = -Infinity;
+      for (const [x, y, z] of fpts) {
+        if (x < xmin) xmin = x; if (x > xmax) xmax = x;
+        if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+        if (z < zmin) zmin = z; if (z > zmax) zmax = z;
+      }
+      bbs.push({
+        cx: (xmin + xmax) / 2000,
+        cy: (ymin + ymax) / 2000,
+        cz: (zmin + zmax) / 2000,
+        hx: (xmax - xmin) / 2000,
+        hy: (ymax - ymin) / 2000,
+        hz: (zmax - zmin) / 2000,
+      });
+    }
+    return bbs;
+  }, [sample]);
+
+  // per-frame occupancy grid (16³, anchored to static bbox) — list of
+  // occupied-voxel centers. Used to snap lattice points into the actual
+  // occupied volume, gas-fill style.
+  const perFrameOcc = useMemo(() => {
+    if (!sample || !bbox) return null;
+    const N = 16;
+    const { xmin, ymin, zmin, xmax, ymax, zmax } = bbox;
+    const dx = (xmax - xmin) / N || 1e-6;
+    const dy = (ymax - ymin) / N || 1e-6;
+    const dz = (zmax - zmin) / N || 1e-6;
+    const all: Float32Array[] = [];
+    for (const fpts of sample.pts_q1000) {
+      const occ = new Set<number>();
+      for (const [px, py, pz] of fpts) {
+        const wx = px / 1000, wy = py / 1000, wz = pz / 1000;
+        const ix = Math.min(N - 1, Math.max(0, Math.floor((wx - xmin) / dx)));
+        const iy = Math.min(N - 1, Math.max(0, Math.floor((wy - ymin) / dy)));
+        const iz = Math.min(N - 1, Math.max(0, Math.floor((wz - zmin) / dz)));
+        occ.add(ix + iy * N + iz * N * N);
+      }
+      const centers = new Float32Array(occ.size * 3);
+      let idx = 0;
+      for (const key of occ) {
+        const ix = key % N;
+        const iy = Math.floor(key / N) % N;
+        const iz = Math.floor(key / (N * N));
+        centers[idx * 3] = xmin + (ix + 0.5) * dx;
+        centers[idx * 3 + 1] = ymin + (iy + 0.5) * dy;
+        centers[idx * 3 + 2] = zmin + (iz + 0.5) * dz;
+        idx++;
+      }
+      all.push(centers);
+    }
+    return { all, dx, dy, dz };
+  }, [sample, bbox]);
+
+  // lattice positions across all frames (same indexing → trivial corr.)
+  // + forward-difference velocity (last frame = 0). This is what the
+  // octonion source D should really use.
+  const latticeFrames = useMemo(() => {
+    if (!sample || !canonicalLattice || !perFrameBboxes || !perFrameOcc) return null;
+    const Tn = sample.pts_q1000.length;
+    const N = canonicalLattice.length;
+    const positions: number[][][] = new Array(Tn);
+    for (let t = 0; t < Tn; t++) {
+      const bb = perFrameBboxes[t];
+      const centers = perFrameOcc.all[t];
+      const occCount = centers.length / 3;
+      const { dx, dy, dz } = perFrameOcc;
+      const fr: number[][] = new Array(N);
+      for (let i = 0; i < N; i++) {
+        const [u, v, w] = canonicalLattice[i];
+        let tx = bb.cx + u * bb.hx;
+        let ty = bb.cy + v * bb.hy;
+        let tz = bb.cz + w * bb.hz;
+        if (occCount > 0) {
+          let best = Infinity;
+          let bestIdx = 0;
+          for (let k = 0; k < occCount; k++) {
+            const ddx = tx - centers[k * 3];
+            const ddy = ty - centers[k * 3 + 1];
+            const ddz = tz - centers[k * 3 + 2];
+            const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+            if (d2 < best) { best = d2; bestIdx = k; }
+          }
+          tx = centers[bestIdx * 3] + u * dx * 0.45;
+          ty = centers[bestIdx * 3 + 1] + v * dy * 0.45;
+          tz = centers[bestIdx * 3 + 2] + w * dz * 0.45;
+        }
+        fr[i] = [tx, ty, tz];
+      }
+      positions[t] = fr;
+    }
+    const velocities: number[][][] = new Array(Tn);
+    for (let t = 0; t < Tn; t++) {
+      velocities[t] = new Array(N);
+      for (let i = 0; i < N; i++) {
+        if (t < Tn - 1) {
+          velocities[t][i] = [
+            positions[t + 1][i][0] - positions[t][i][0],
+            positions[t + 1][i][1] - positions[t][i][1],
+            positions[t + 1][i][2] - positions[t][i][2],
+          ];
+        } else {
+          velocities[t][i] = [0, 0, 0];
+        }
+      }
+    }
+    return { positions, velocities };
+  }, [sample, canonicalLattice, perFrameBboxes, perFrameOcc]);
+
+  // forward-difference velocity (last frame zero)
+  const velocities = useMemo(() => {
+    if (!sample) return null;
+    const pts = sample.pts_q1000;
+    const Tn = pts.length;
+    const N = pts[0]?.length ?? 0;
+    const v: number[][][] = [];
+    for (let t = 0; t < Tn; t++) {
+      const f: number[][] = [];
+      for (let i = 0; i < N; i++) {
+        if (t < Tn - 1) {
+          f.push([
+            pts[t + 1][i][0] - pts[t][i][0],
+            pts[t + 1][i][1] - pts[t][i][1],
+            pts[t + 1][i][2] - pts[t][i][2],
+          ]);
+        } else {
+          f.push([0, 0, 0]);
+        }
+      }
+      v.push(f);
+    }
+    return v;
+  }, [sample]);
+
+  // animate
+  useEffect(() => {
+    if (!playing || T === 0) return;
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      if (now - last > 1000 / fps) {
+        setFrame(f => (f + 1) % T);
+        last = now;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, T, fps]);
+
+  // render
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c || !sample) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cw = c.clientWidth;
+    const ch = c.clientHeight;
+    if (c.width !== cw * dpr) {
+      c.width = cw * dpr;
+      c.height = ch * dpr;
+    }
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#0b1020";
+    ctx.fillRect(0, 0, cw, ch);
+
+    // grid floor
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.lineWidth = 1;
+    for (let i = -3; i <= 3; i++) {
+      const a = project(i * 0.4, -0.7, -1.2, yaw, pitch, cw, ch, zoom, panX, panY);
+      const b = project(i * 0.4, -0.7, 1.2, yaw, pitch, cw, ch, zoom, panX, panY);
+      const cA = project(-1.2, -0.7, i * 0.4, yaw, pitch, cw, ch, zoom, panX, panY);
+      const dB = project(1.2, -0.7, i * 0.4, yaw, pitch, cw, ch, zoom, panX, panY);
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cA[0], cA[1]); ctx.lineTo(dB[0], dB[1]); ctx.stroke();
+    }
+
+    // world origin gnomon (always shown)
+    {
+      const origin = project(0, 0, 0, yaw, pitch, cw, ch, zoom, panX, panY);
+      const axisLen = 0.25;
+      const xEnd = project(axisLen, 0, 0, yaw, pitch, cw, ch, zoom, panX, panY);
+      const yEnd = project(0, axisLen, 0, yaw, pitch, cw, ch, zoom, panX, panY);
+      const zEnd = project(0, 0, axisLen, yaw, pitch, cw, ch, zoom, panX, panY);
+      drawArrow2D(ctx, origin[0], origin[1], xEnd[0], xEnd[1], "#ef4444", 0.95);
+      drawArrow2D(ctx, origin[0], origin[1], yEnd[0], yEnd[1], "#22c55e", 0.95);
+      drawArrow2D(ctx, origin[0], origin[1], zEnd[0], zEnd[1], "#3b82f6", 0.95);
+      // axis labels
+      ctx.font = "bold 10px ui-monospace, monospace";
+      ctx.fillStyle = "#ef4444"; ctx.fillText("X", xEnd[0] + 3, xEnd[1] + 3);
+      ctx.fillStyle = "#22c55e"; ctx.fillText("Y", yEnd[0] + 3, yEnd[1] + 3);
+      ctx.fillStyle = "#3b82f6"; ctx.fillText("Z", zEnd[0] + 3, zEnd[1] + 3);
+      // origin dot + label
+      ctx.fillStyle = "#fde047";
+      ctx.beginPath();
+      ctx.arc(origin[0], origin[1], 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#0b1020";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.font = "bold 10px ui-monospace, monospace";
+      const label = "0 (dataset mean)";
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(11, 16, 32, 0.85)";
+      ctx.fillRect(origin[0] - tw / 2 - 3, origin[1] + 8, tw + 6, 14);
+      ctx.fillStyle = "#fde047";
+      ctx.textAlign = "center";
+      ctx.fillText(label, origin[0], origin[1] + 19);
+      ctx.textAlign = "start";
+    }
+
+    // bounding box + axis markers (drawn behind points)
+    if (showBox && bbox) {
+      const { xmin, ymin, zmin, xmax, ymax, zmax } = bbox;
+      const corners: [number, number, number][] = [
+        [xmin, ymin, zmin], [xmax, ymin, zmin], [xmax, ymax, zmin], [xmin, ymax, zmin],
+        [xmin, ymin, zmax], [xmax, ymin, zmax], [xmax, ymax, zmax], [xmin, ymax, zmax],
+      ];
+      const projC = corners.map(([x, y, z]) => project(x, y, z, yaw, pitch, cw, ch, zoom, panX, panY));
+      const edges: [number, number][] = [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7],
+      ];
+      ctx.strokeStyle = "rgba(125, 211, 252, 0.35)";
+      ctx.lineWidth = 1;
+      for (const [a, b] of edges) {
+        ctx.beginPath();
+        ctx.moveTo(projC[a][0], projC[a][1]);
+        ctx.lineTo(projC[b][0], projC[b][1]);
+        ctx.stroke();
+      }
+
+      // axis markers at face centers
+      const cx = (xmin + xmax) / 2;
+      const cy = (ymin + ymax) / 2;
+      const cz = (zmin + zmax) / 2;
+      const markers: { pos: [number, number, number]; label: string; color: string }[] = [
+        { pos: [xmax, cy, cz], label: "RIGHT +X", color: "#f87171" },
+        { pos: [xmin, cy, cz], label: "LEFT -X",  color: "#fca5a5" },
+        { pos: [cx, ymax, cz], label: "UP +Y",    color: "#86efac" },
+        { pos: [cx, ymin, cz], label: "DOWN -Y",  color: "#bbf7d0" },
+        { pos: [cx, cy, zmax], label: "OUT +Z",   color: "#93c5fd" },
+        { pos: [cx, cy, zmin], label: "IN -Z",    color: "#bfdbfe" },
+      ];
+      const center = project(cx, cy, cz, yaw, pitch, cw, ch, zoom, panX, panY);
+      ctx.font = "bold 11px ui-monospace, monospace";
+      for (const m of markers) {
+        const p = project(m.pos[0], m.pos[1], m.pos[2], yaw, pitch, cw, ch, zoom, panX, panY);
+        // line from box-center to face-center
+        ctx.strokeStyle = m.color;
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath();
+        ctx.moveTo(center[0], center[1]);
+        ctx.lineTo(p[0], p[1]);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        // label
+        ctx.fillStyle = m.color;
+        const tw = ctx.measureText(m.label).width;
+        ctx.fillStyle = "rgba(11, 16, 32, 0.85)";
+        ctx.fillRect(p[0] - tw / 2 - 3, p[1] - 7, tw + 6, 14);
+        ctx.fillStyle = m.color;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(m.label, p[0], p[1]);
+        ctx.textAlign = "start";
+        ctx.textBaseline = "alphabetic";
+      }
+    }
+
+    const f = sample.pts_q1000[frame];
+    const vf = velocities ? velocities[frame] : null;
+    const cap = Math.min(numPoints, f.length);
+
+    // single unified volume: voxelize points then render screen-space hull
+    // of all occupied-voxel corners as one filled silhouette
+    if (showVolume && bbox) {
+      const { xmin, ymin, zmin, xmax, ymax, zmax } = bbox;
+      const N = voxelRes;
+      const dx = (xmax - xmin) / N || 1e-6;
+      const dy = (ymax - ymin) / N || 1e-6;
+      const dz = (zmax - zmin) / N || 1e-6;
+      const occ = new Set<number>();
+      for (let i = 0; i < cap; i++) {
+        const [px, py, pz] = f[i];
+        const wx = px / 1000, wy = py / 1000, wz = pz / 1000;
+        const ix = Math.min(N - 1, Math.max(0, Math.floor((wx - xmin) / dx)));
+        const iy = Math.min(N - 1, Math.max(0, Math.floor((wy - ymin) / dy)));
+        const iz = Math.min(N - 1, Math.max(0, Math.floor((wz - zmin) / dz)));
+        occ.add(ix + iy * N + iz * N * N);
+      }
+
+      // collect projected corners of every occupied voxel + the original points
+      const allX: number[] = [];
+      const allY: number[] = [];
+      const corners: [number, number, number][] = [
+        [-1, -1, -1], [ 1, -1, -1], [ 1,  1, -1], [-1,  1, -1],
+        [-1, -1,  1], [ 1, -1,  1], [ 1,  1,  1], [-1,  1,  1],
+      ];
+      for (const key of occ) {
+        const ix = key % N;
+        const iy = Math.floor(key / N) % N;
+        const iz = Math.floor(key / (N * N));
+        const cx = xmin + (ix + 0.5) * dx;
+        const cy = ymin + (iy + 0.5) * dy;
+        const cz = zmin + (iz + 0.5) * dz;
+        for (const [sx, sy, sz] of corners) {
+          const [px2, py2] = project(
+            cx + sx * dx / 2, cy + sy * dy / 2, cz + sz * dz / 2,
+            yaw, pitch, cw, ch, zoom, panX, panY,
+          );
+          allX.push(px2);
+          allY.push(py2);
+        }
+      }
+      // also include raw point projections so silhouette tightly tracks them
+      for (let i = 0; i < cap; i++) {
+        const [px, py, pz] = f[i];
+        const [sxv, syv] = project(px / 1000, py / 1000, pz / 1000, yaw, pitch, cw, ch, zoom, panX, panY);
+        allX.push(sxv);
+        allY.push(syv);
+      }
+
+      if (allX.length >= 3) {
+        const hull = convexHull2D(allX, allY);
+        ctx.fillStyle = "rgba(96, 165, 250, 0.20)";
+        ctx.strokeStyle = "rgba(125, 211, 252, 0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(hull[0][0], hull[0][1]);
+        for (let i = 1; i < hull.length; i++) ctx.lineTo(hull[i][0], hull[i][1]);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    type Item = {
+      sxv: number; syv: number; depth: number; idx: number;
+      // arrow endpoints (already projected)
+      aEx?: number; aEy?: number;
+      bEx?: number; bEy?: number;
+    };
+    const items: Item[] = [];
+    for (let i = 0; showPoints && i < cap; i++) {
+      const [px, py, pz] = f[i];
+      const wx = px / 1000, wy = py / 1000, wz = pz / 1000;
+      const [sxv, syv, depth] = project(wx, wy, wz, yaw, pitch, cw, ch, zoom, panX, panY);
+      const it: Item = { sxv, syv, depth, idx: i };
+
+      if (showGlyph && !showLattice) {
+        // octonion D: o = (1, x, y, z, 1, vx, vy, vz)
+        const aEx3 = wx + glyphScale * wx;
+        const aEy3 = wy + glyphScale * wy;
+        const aEz3 = wz + glyphScale * wz;
+        const [aEx, aEy] = project(aEx3, aEy3, aEz3, yaw, pitch, cw, ch, zoom, panX, panY);
+        it.aEx = aEx; it.aEy = aEy;
+
+        if (vf) {
+          const [vxq, vyq, vzq] = vf[i];
+          const vx = vxq / 1000, vy = vyq / 1000, vz = vzq / 1000;
+          const bEx3 = wx + velScale * vx;
+          const bEy3 = wy + velScale * vy;
+          const bEz3 = wz + velScale * vz;
+          const [bEx, bEy] = project(bEx3, bEy3, bEz3, yaw, pitch, cw, ch, zoom, panX, panY);
+          it.bEx = bEx; it.bEy = bEy;
+        }
+      }
+      items.push(it);
+    }
+    items.sort((a, b) => b.depth - a.depth);
+
+    for (const it of items) {
+      const t = Math.max(0, Math.min(1, (5.0 - it.depth) / 4.0));
+      const r = 1.8 + t * 2.2;
+      const alpha = 0.4 + t * 0.55;
+      const hue = 200 - t * 180;
+
+      // arrows first (under point dot)
+      if (showGlyph) {
+        const aAlpha = 0.55 + t * 0.4;
+        if (it.aEx !== undefined && it.aEy !== undefined) {
+          drawArrow2D(ctx, it.sxv, it.syv, it.aEx, it.aEy, "#f43f5e", aAlpha);
+        }
+        if (it.bEx !== undefined && it.bEy !== undefined) {
+          drawArrow2D(ctx, it.sxv, it.syv, it.bEx, it.bEy, "#22d3ee", aAlpha);
+        }
+      }
+
+      ctx.fillStyle = `hsla(${hue}, 80%, ${30 + t * 30}%, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(it.sxv, it.syv, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (hoverIdx === it.idx) {
+        ctx.strokeStyle = "#fde047";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(it.sxv, it.syv, r + 4, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      if (showLabels) {
+        const isHover = hoverIdx === it.idx;
+        ctx.font = `${isHover ? "bold " : ""}10px ui-monospace, monospace`;
+        ctx.fillStyle = isHover
+          ? "#fde047"
+          : `rgba(229, 231, 235, ${0.4 + t * 0.5})`;
+        ctx.fillText(String(it.idx), it.sxv + r + 2, it.syv - r - 1);
+      }
+    }
+
+    // corresponded lattice + octonion arrows on each lattice point.
+    // pos = lattice world position; vel = forward diff of same-index
+    // lattice point across frames (REAL motion since correspondence holds).
+    if (showLattice && latticeFrames && latticeCount > 0) {
+      const posF = latticeFrames.positions[frame];
+      const velF = latticeFrames.velocities[frame];
+      const nShow = Math.min(latticeCount, posF.length);
+      type LP = {
+        sxv: number; syv: number; depth: number; idx: number;
+        aEx?: number; aEy?: number;
+        bEx?: number; bEy?: number;
+      };
+      const lp: LP[] = [];
+      for (let i = 0; i < nShow; i++) {
+        const [tx, ty, tz] = posF[i];
+        const [sxv, syv, depth] = project(tx, ty, tz, yaw, pitch, cw, ch, zoom, panX, panY);
+        const it: LP = { sxv, syv, depth, idx: i };
+        if (showGlyph) {
+          const aE = project(tx + glyphScale * tx, ty + glyphScale * ty, tz + glyphScale * tz, yaw, pitch, cw, ch, zoom, panX, panY);
+          it.aEx = aE[0]; it.aEy = aE[1];
+          const [vx, vy, vz] = velF[i];
+          const bE = project(tx + velScale * vx, ty + velScale * vy, tz + velScale * vz, yaw, pitch, cw, ch, zoom, panX, panY);
+          it.bEx = bE[0]; it.bEy = bE[1];
+        }
+        lp.push(it);
+      }
+      lp.sort((a, b) => b.depth - a.depth);
+      for (const p of lp) {
+        const t = Math.max(0, Math.min(1, (5.0 - p.depth) / 4.0));
+        const r = 2.5 + t * 2.2;
+        if (showGlyph) {
+          const aAlpha = 0.55 + t * 0.4;
+          if (p.aEx !== undefined && p.aEy !== undefined) {
+            drawArrow2D(ctx, p.sxv, p.syv, p.aEx, p.aEy, "#f43f5e", aAlpha);
+          }
+          if (p.bEx !== undefined && p.bEy !== undefined) {
+            drawArrow2D(ctx, p.sxv, p.syv, p.bEx, p.bEy, "#22d3ee", aAlpha);
+          }
+        }
+        ctx.fillStyle = `rgba(251, 191, 36, ${0.6 + t * 0.35})`;
+        ctx.strokeStyle = `rgba(120, 53, 15, 0.7)`;
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.arc(p.sxv, p.syv, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        if (hoverIdx === p.idx) {
+          ctx.strokeStyle = "#fde047";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(p.sxv, p.syv, r + 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        if (showLabels) {
+          ctx.font = "9px ui-monospace, monospace";
+          ctx.fillStyle = `rgba(254, 215, 170, ${0.7 + t * 0.3})`;
+          ctx.fillText(`L${p.idx}`, p.sxv + r + 1, p.syv - r);
+        }
+      }
+    }
+
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText(`f${frame.toString().padStart(2, "0")}/${T - 1}  pts ${cap}/${dataPoints}`, 8, ch - 8);
+
+    // legend
+    if (showGlyph) {
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillStyle = "#f43f5e";
+      ctx.fillText("● pos-quat (e0..e3)", 8, 16);
+      ctx.fillStyle = "#22d3ee";
+      ctx.fillText("● vel-quat (e4..e7)", 8, 30);
+    }
+  }, [frame, yaw, pitch, sample, T, numPoints, dataPoints, showGlyph, glyphScale, velScale, velocities, hoverIdx, zoom, panX, panY, showBox, showPoints, showLabels, showVolume, voxelRes, showLattice, latticeCount, latticeFrames, bbox]);
+
+  const onCanvasDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    if (e.button === 2) {
+      dragging.current = { x: e.clientX, y: e.clientY, yaw, pitch };
+    } else {
+      panning.current = { x: e.clientX, y: e.clientY, panX, panY };
+    }
+  }, [yaw, pitch, panX, panY]);
+
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    const factor = Math.exp(-e.deltaY * 0.0015);
+    setZoom(z => Math.max(0.2, Math.min(20, z * factor)));
+  }, []);
+
+  // also block default scroll on canvas (React onWheel is passive in React 17+)
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const block = (e: WheelEvent) => e.preventDefault();
+    c.addEventListener("wheel", block, { passive: false });
+    return () => c.removeEventListener("wheel", block);
+  }, [sample]);
+
+  // touch handlers (1 finger = rotate, 2 fingers = pinch zoom + pan)
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const start = (e: TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        touchState.current = {
+          mode: "rotate",
+          x: t.clientX, y: t.clientY,
+          yaw, pitch, panX, panY, dist: 0, zoom,
+        };
+      } else if (e.touches.length >= 2) {
+        const a = e.touches[0], b = e.touches[1];
+        const cx = (a.clientX + b.clientX) / 2;
+        const cy = (a.clientY + b.clientY) / 2;
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        touchState.current = {
+          mode: "pinch",
+          x: cx, y: cy,
+          yaw, pitch, panX, panY, dist, zoom,
+        };
+      }
+    };
+    const move = (e: TouchEvent) => {
+      e.preventDefault();
+      const s = touchState.current;
+      if (!s) return;
+      if (s.mode === "rotate" && e.touches.length === 1) {
+        const t = e.touches[0];
+        const dx = t.clientX - s.x;
+        const dy = t.clientY - s.y;
+        setYaw(s.yaw + dx * 0.01);
+        setPitch(Math.max(-1.4, Math.min(1.4, s.pitch + dy * 0.01)));
+      } else if (s.mode === "pinch" && e.touches.length >= 2) {
+        const a = e.touches[0], b = e.touches[1];
+        const cx = (a.clientX + b.clientX) / 2;
+        const cy = (a.clientY + b.clientY) / 2;
+        const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+        const factor = dist / s.dist;
+        setZoom(Math.max(0.2, Math.min(20, s.zoom * factor)));
+        setPanX(s.panX + (cx - s.x));
+        setPanY(s.panY + (cy - s.y));
+      }
+    };
+    const end = () => { touchState.current = null; };
+    c.addEventListener("touchstart", start, { passive: false });
+    c.addEventListener("touchmove", move, { passive: false });
+    c.addEventListener("touchend", end);
+    c.addEventListener("touchcancel", end);
+    return () => {
+      c.removeEventListener("touchstart", start);
+      c.removeEventListener("touchmove", move);
+      c.removeEventListener("touchend", end);
+      c.removeEventListener("touchcancel", end);
+    };
+  }, [sample, yaw, pitch, panX, panY, zoom]);
+
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      const d = dragging.current;
+      if (d) {
+        const dx = e.clientX - d.x;
+        const dy = e.clientY - d.y;
+        setYaw(d.yaw + dx * 0.01);
+        setPitch(Math.max(-1.4, Math.min(1.4, d.pitch + dy * 0.01)));
+      }
+      const p = panning.current;
+      if (p) {
+        const dx = e.clientX - p.x;
+        const dy = e.clientY - p.y;
+        setPanX(p.panX + dx);
+        setPanY(p.panY + dy);
+      }
+    };
+    const up = () => { dragging.current = null; panning.current = null; };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+  }, []);
+
+  if (error) return <div style={{ color: "#fca5a5", padding: 24 }}>Failed: {error}</div>;
+  if (!data || !sample) return (
+    <div style={{ color: "#9ca3af", padding: 24, fontFamily: "ui-monospace, monospace" }}>
+      Loading class3_viz.json...
     </div>
   );
-}
 
-function RealView({
-  realData,
-  realError,
-  frameIndex,
-}: {
-  realData: RealData | null;
-  realError: string | null;
-  frameIndex: number;
-}) {
-  const [selectedClass, setSelectedClass] = useState(0);
-  if (realError) {
-    return (
-      <div className="rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700">
-        Failed to load hungarian_samples.json: {realError}
-      </div>
-    );
-  }
-  if (!realData) {
-    return (
-      <div className="rounded border border-[var(--card-border)] bg-[var(--card)] p-4 text-sm text-[var(--muted)]">
-        Loading real Hungarian samples…
-      </div>
-    );
-  }
-  const classes = realData.classes;
-  const cur = classes[selectedClass];
   return (
-    <section>
-      <div className="mb-3 flex items-center gap-3 text-xs text-[var(--muted)]">
-        <span>{classes.length} classes · P={realData.P} · T={realData.T}</span>
-        <span>one test sample per class, Hungarian correspondence-aligned</span>
-      </div>
-      {/* Class pill selector */}
-      <div className="mb-3 -mx-3 overflow-x-auto px-3 sm:mx-0 sm:px-0">
-        <div className="flex gap-1">
-          {classes.map((c, i) => (
-            <button
-              key={c.classId}
-              onClick={() => setSelectedClass(i)}
-              className={`shrink-0 rounded px-2 py-1 font-mono text-[11px] ${
-                i === selectedClass
-                  ? "bg-[var(--foreground)] text-[var(--background)]"
-                  : "border border-[var(--card-border)] hover:bg-[var(--card)]"
-              }`}
-            >
-              c{String(c.classId + 1).padStart(2, "0")}
-            </button>
-          ))}
+    <div style={{
+      width: "100vw",
+      height: "100vh",
+      background: "linear-gradient(180deg, #050816 0%, #0b1230 100%)",
+      color: "#e5e7eb",
+      fontFamily: "ui-monospace, monospace",
+      position: "relative",
+      overflow: "hidden",
+    }}>
+      {/* title — top-left overlay */}
+      <div style={{
+        position: "absolute",
+        top: 12,
+        left: 12,
+        padding: "8px 12px",
+        background: "rgba(11, 16, 32, 0.78)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 8,
+        zIndex: 10,
+        maxWidth: 360,
+      }}>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>
+          Class {data.target_class}: {data.class_names[data.target_class]}
+        </div>
+        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}>
+          #{sample.idx} | pred:&nbsp;
+          <b style={{ color: sample.correct ? "#bbf7d0" : "#fecaca" }}>
+            {data.class_names[sample.pred_class]}
+          </b> | {sample.correct ? "OK" : "WRONG"}
+        </div>
+        <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+          L-drag pan · R-drag rotate · wheel zoom · pinch · zoom {zoom.toFixed(2)}×
         </div>
       </div>
-      <RealSampleCard classId={cur.classId} frames={cur.frames as V3[][]} frameIndex={frameIndex} />
-    </section>
-  );
-}
 
-type SynthViewProps = {
-  N: (typeof N_OPTIONS)[number];
-  setN: (n: (typeof N_OPTIONS)[number]) => void;
-  totalRotTurns: number;
-  setTotalRotTurns: (n: number) => void;
-  deformAmp: number;
-  setDeformAmp: (n: number) => void;
-  speed: (typeof SPEED_OPTIONS)[number];
-  setSpeed: (n: (typeof SPEED_OPTIONS)[number]) => void;
-  setFrameIndex: (f: number) => void;
-  datasets: { sample: Sample; frames: V3[][]; stats: SampleStats }[];
-  frameIndex: number;
-};
+      {/* controls — bottom-left overlay (collapsible) */}
+      <div style={{
+        position: "absolute",
+        bottom: 12,
+        left: 12,
+        padding: panelOpen ? "12px 14px" : "6px 10px",
+        background: "rgba(11, 16, 32, 0.85)",
+        border: "1px solid rgba(255,255,255,0.14)",
+        borderRadius: 8,
+        zIndex: 10,
+        maxWidth: 460,
+        backdropFilter: "blur(6px)",
+      }}>
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          cursor: "pointer",
+          fontSize: 11,
+          fontWeight: 700,
+          color: "#9ca3af",
+          marginBottom: panelOpen ? 8 : 0,
+        }}
+          onClick={() => setPanelOpen(o => !o)}
+        >
+          <span>{panelOpen ? "▼" : "▶"} controls</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); setPlaying(p => !p); }}
+            style={{
+              padding: "4px 12px",
+              background: playing ? "#ef4444" : "#22c55e",
+              color: "#0b1020",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+              fontFamily: "ui-monospace, monospace",
+              fontWeight: 700,
+              fontSize: 10,
+            }}
+          >
+            {playing ? "pause" : "play"}
+          </button>
+        </div>
+        {panelOpen && <div style={{
+        display: "grid",
+        gridTemplateColumns: "auto 1fr auto",
+        gap: "8px 12px",
+        alignItems: "center",
+        fontSize: 11,
+      }}>
+        <label>sample</label>
+        <input
+          type="range"
+          min={0}
+          max={data.samples_c3.length - 1}
+          value={sampleIdx}
+          onChange={e => { setSampleIdx(parseInt(e.target.value)); setFrame(0); }}
+          style={{ width: "100%" }}
+        />
+        <span style={{ minWidth: 80, textAlign: "right" }}>
+          {sampleIdx + 1} / {data.samples_c3.length}
+        </span>
 
-function SynthView({
-  N, setN, totalRotTurns, setTotalRotTurns, deformAmp, setDeformAmp,
-  speed, setSpeed, setFrameIndex, datasets, frameIndex,
-}: SynthViewProps) {
-  return (
-    <>
-        {/* Controls */}
-        <section className="mb-4 grid grid-cols-1 gap-3 rounded border border-[var(--card-border)] bg-[var(--card)] p-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <label className="block text-[11px] text-[var(--muted)]">Frames</label>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {N_OPTIONS.map(n => (
-                <button
-                  key={n}
-                  onClick={() => setN(n)}
-                  className={`rounded px-2 py-1 font-mono text-xs ${
-                    n === N
-                      ? "bg-[var(--foreground)] text-[var(--background)]"
-                      : "border border-[var(--card-border)]"
-                  }`}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="block text-[11px] text-[var(--muted)]">
-              Total rotation: <span className="font-mono">{totalRotTurns.toFixed(2)}×2π</span>
-            </label>
+        <label>speed (fps)</label>
+        <input
+          type="range"
+          min={1}
+          max={30}
+          value={fps}
+          onChange={e => setFps(parseInt(e.target.value))}
+          style={{ width: "100%" }}
+        />
+        <span style={{ minWidth: 80, textAlign: "right" }}>{fps}</span>
+
+        <label>points</label>
+        <input
+          type="range"
+          min={0}
+          max={MAX_POINTS}
+          value={numPoints}
+          onChange={e => setNumPoints(parseInt(e.target.value))}
+          style={{ width: "100%" }}
+        />
+        <span style={{ minWidth: 80, textAlign: "right" }}>
+          {numPoints} (data {dataPoints})
+        </span>
+
+        <label>frame</label>
+        <input
+          type="range"
+          min={0}
+          max={Math.max(0, T - 1)}
+          value={frame}
+          onChange={e => setFrame(parseInt(e.target.value))}
+          style={{ width: "100%" }}
+        />
+        <span style={{ minWidth: 80, textAlign: "right" }}>{frame} / {T - 1}</span>
+
+        <label>glyph</label>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
             <input
-              type="range" min={0} max={3} step={0.05}
-              value={totalRotTurns}
-              onChange={e => setTotalRotTurns(parseFloat(e.target.value))}
-              className="mt-1 w-full accent-[var(--foreground)]"
+              type="checkbox"
+              checked={showGlyph}
+              onChange={e => setShowGlyph(e.target.checked)}
             />
-          </div>
-          <div>
-            <label className="block text-[11px] text-[var(--muted)]">
-              Deform amp: <span className="font-mono">{deformAmp.toFixed(2)}</span>
-            </label>
-            <input
-              type="range" min={0} max={1} step={0.01}
-              value={deformAmp}
-              onChange={e => setDeformAmp(parseFloat(e.target.value))}
-              className="mt-1 w-full accent-[var(--foreground)]"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] text-[var(--muted)]">Speed</label>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {SPEED_OPTIONS.map(s => (
-                <button
-                  key={s}
-                  onClick={() => setSpeed(s)}
-                  className={`rounded px-2 py-1 font-mono text-xs ${
-                    s === speed
-                      ? "bg-[var(--foreground)] text-[var(--background)]"
-                      : "border border-[var(--card-border)]"
-                  }`}
-                >
-                  {s}×
-                </button>
-              ))}
-              <button
-                onClick={() => setFrameIndex(0)}
-                className="rounded border border-[var(--card-border)] px-2 py-1 text-xs"
-              >
-                ⟲
-              </button>
-            </div>
-          </div>
-        </section>
+            show octonion arrows
+          </label>
+          <span style={{ color: "#9ca3af" }}>pos-scale</span>
+          <input
+            type="range"
+            min={0}
+            max={50}
+            value={Math.round(glyphScale * 100)}
+            onChange={e => setGlyphScale(parseInt(e.target.value) / 100)}
+            style={{ width: 100 }}
+          />
+          <span style={{ color: "#9ca3af" }}>vel-scale</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(velScale * 10)}
+            onChange={e => setVelScale(parseInt(e.target.value) / 10)}
+            style={{ width: 100 }}
+          />
+        </div>
+        <span style={{ minWidth: 80, textAlign: "right", color: "#9ca3af" }}>
+          {glyphScale.toFixed(2)} / {velScale.toFixed(1)}
+        </span>
 
-        {/* Sample grid — mobile 1 col, tablet 2, desktop 3 */}
-        <section>
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Rigid</h2>
-          <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {datasets.slice(0, 3).map(d => (
-              <SampleCard key={d.sample.name} sample={d.sample} frames={d.frames} stats={d.stats} frameIndex={frameIndex} />
+        <label>scene</label>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={showBox}
+              onChange={e => setShowBox(e.target.checked)}
+            />
+            bbox + axes
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={showPoints}
+              onChange={e => setShowPoints(e.target.checked)}
+            />
+            raw points
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={showLabels}
+              onChange={e => setShowLabels(e.target.checked)}
+            />
+            number points
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={showVolume}
+              onChange={e => setShowVolume(e.target.checked)}
+            />
+            volume
+          </label>
+          <span style={{ color: "#9ca3af" }}>vox</span>
+          <input
+            type="range"
+            min={4}
+            max={32}
+            value={voxelRes}
+            onChange={e => setVoxelRes(parseInt(e.target.value))}
+            disabled={!showVolume}
+            style={{ width: 100 }}
+          />
+          <span style={{ color: "#9ca3af", minWidth: 24 }}>{voxelRes}</span>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={showLattice}
+              onChange={e => setShowLattice(e.target.checked)}
+            />
+            lattice (corresponded)
+          </label>
+          <span style={{ color: "#9ca3af" }}>L#</span>
+          <input
+            type="range"
+            min={1}
+            max={512}
+            value={latticeCount}
+            onChange={e => setLatticeCount(parseInt(e.target.value))}
+            disabled={!showLattice}
+            style={{ width: 120 }}
+          />
+          <span style={{ color: "#9ca3af", minWidth: 32 }}>
+            {latticeCount}/512
+          </span>
+          <span style={{ color: "#9ca3af" }}>zoom</span>
+          <input
+            type="range"
+            min={20}
+            max={2000}
+            value={Math.round(zoom * 100)}
+            onChange={e => setZoom(parseInt(e.target.value) / 100)}
+            style={{ width: 140 }}
+          />
+          <button
+            onClick={() => setZoom(1)}
+            style={{
+              padding: "2px 10px",
+              background: "transparent",
+              border: "1px solid rgba(255,255,255,0.2)",
+              borderRadius: 4,
+              color: "#9ca3af",
+              cursor: "pointer",
+              fontFamily: "ui-monospace, monospace",
+              fontSize: 11,
+            }}
+          >
+            reset
+          </button>
+        </div>
+        <span style={{ minWidth: 80, textAlign: "right", color: "#9ca3af" }}>
+          {zoom.toFixed(2)}×
+        </span>
+
+        <label>inspect pt</label>
+        <input
+          type="range"
+          min={-1}
+          max={(showLattice ? latticeCount : Math.min(numPoints, dataPoints)) - 1}
+          value={hoverIdx ?? -1}
+          onChange={e => {
+            const v = parseInt(e.target.value);
+            setHoverIdx(v < 0 ? null : v);
+          }}
+          style={{ width: "100%" }}
+        />
+        <span style={{ minWidth: 80, textAlign: "right" }}>
+          {hoverIdx === null ? "—" : (showLattice ? `L${hoverIdx}` : `pt ${hoverIdx}`)}
+        </span>
+
+        </div>}
+      </div>
+
+      <canvas
+        ref={canvasRef}
+        onMouseDown={onCanvasDown}
+        onWheel={onWheel}
+        onContextMenu={e => e.preventDefault()}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          cursor: "grab",
+          touchAction: "none",
+          zIndex: 1,
+        }}
+      />
+      {hoverIdx !== null && sample && (() => {
+        let p: number[], v: number[], src: string;
+        if (showLattice && latticeFrames && hoverIdx < latticeFrames.positions[frame].length) {
+          p = latticeFrames.positions[frame][hoverIdx].map(x => x * 1000);
+          v = latticeFrames.velocities[frame][hoverIdx].map(x => x * 1000);
+          src = `L${hoverIdx}`;
+        } else if (velocities && hoverIdx < sample.pts_q1000[frame].length) {
+          p = sample.pts_q1000[frame][hoverIdx];
+          v = velocities[frame][hoverIdx];
+          src = `pt ${hoverIdx}`;
+        } else {
+          return null;
+        }
+        const o: number[] = [
+          1, p[0] / 1000, p[1] / 1000, p[2] / 1000,
+          1, v[0] / 1000, v[1] / 1000, v[2] / 1000,
+        ];
+        const labels = ["e0", "e1 (x)", "e2 (y)", "e3 (z)", "e4", "e5 (vx)", "e6 (vy)", "e7 (vz)"];
+        return (
+          <div style={{
+            position: "absolute",
+            top: 12,
+            right: 12,
+            background: "rgba(11, 16, 32, 0.92)",
+            border: "1px solid rgba(255,255,255,0.18)",
+            borderRadius: 8,
+            padding: "10px 12px",
+            fontFamily: "ui-monospace, monospace",
+            fontSize: 11,
+            color: "#e5e7eb",
+            minWidth: 200,
+            zIndex: 10,
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: 6, color: "#fde047" }}>
+              octonion @ {src}, frame {frame}
+            </div>
+            <div style={{ color: "#f43f5e", marginBottom: 2 }}>pos-quat a = (e0..e3):</div>
+            {o.slice(0, 4).map((val, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "#9ca3af" }}>{labels[i]}</span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {val.toFixed(4)}
+                </span>
+              </div>
+            ))}
+            <div style={{ color: "#22d3ee", margin: "6px 0 2px" }}>vel-quat b = (e4..e7):</div>
+            {o.slice(4, 8).map((val, i) => (
+              <div key={i + 4} style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: "#9ca3af" }}>{labels[i + 4]}</span>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                  {val.toFixed(4)}
+                </span>
+              </div>
             ))}
           </div>
-          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Deformed</h2>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {datasets.slice(3).map(d => (
-              <SampleCard key={d.sample.name} sample={d.sample} frames={d.frames} stats={d.stats} frameIndex={frameIndex} />
-            ))}
-          </div>
-        </section>
-
-        {/* Small-angle add-vs-multiply demo */}
-        <SmallAngleDemo />
-
-        {/* Method note */}
-        <section className="mt-6 rounded border border-[var(--card-border)] bg-[var(--card)] p-3 text-[11px] leading-relaxed text-[var(--muted)]">
-          <div className="mb-1 font-semibold text-[var(--foreground)]">Method</div>
-          <ul className="list-disc space-y-0.5 pl-4">
-            <li>
-              Per point <span className="font-mono">i</span> and step{" "}
-              <span className="font-mono">f → f+1</span>:{" "}
-              <span className="font-mono">qf_ii&apos;</span> is the shortest-arc quaternion rotating{" "}
-              <span className="font-mono">(pᵢ − centroid_t)</span> to{" "}
-              <span className="font-mono">(pᵢ&apos; − centroid_{"{t+1}"})</span>.{" "}
-              <span className="font-mono">qb_i&apos;i = qf_ii&apos;*</span> (conjugate).
-            </li>
-            <li>
-              Two-frame transitivity: compare direct{" "}
-              <span className="font-mono">qf_ii&apos;&apos;</span> (a → a&apos;&apos;) with the composed{" "}
-              <span className="font-mono">qf_i&apos;i&apos;&apos; ∘ qf_ii&apos;</span> (a → a&apos; → a&apos;&apos;). Angle between them = transitivity error.
-              For rigid rotation = 0°; for deform &gt; 0°.
-            </li>
-            <li>
-              Cycle angle: compose per-step Kabsch rotations R<sub>t</sub> = F<sub>t+1</sub>·F<sub>t</sub><sup>T</sup> across the full cycle, take angle from identity. Rigid = 0°, deform &gt; 0°.
-            </li>
-            <li>
-              Mean residual: how non-rigid each step is (Procrustes leftover).
-            </li>
-          </ul>
-        </section>
-    </>
+        );
+      })()}
+    </div>
   );
 }
