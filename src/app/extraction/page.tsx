@@ -12,7 +12,97 @@ type Repr = {
   sample_labels: number[];
   proto_2d: number[][];
   mean_2d: number[][];
+  motion?: number[][][][]; // [class][frame][point][xyz]
+  motion_cos?: number[];
 };
+
+function MotionCell({ pts, name, cos, idx, t }: {
+  pts: number[][][]; name: string; cos: number; idx: number; t: number;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const W = 130, H = 130;
+  useEffect(() => {
+    const c = ref.current; if (!c) return;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#0a0a0a";
+    ctx.fillRect(0, 0, W, H);
+    // bounds across all frames for stable view
+    let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+    for (const f of pts) for (const p of f) {
+      if (p[0] < xmin) xmin = p[0]; if (p[0] > xmax) xmax = p[0];
+      if (p[1] < ymin) ymin = p[1]; if (p[1] > ymax) ymax = p[1];
+    }
+    const pad = 10;
+    const span = Math.max(xmax - xmin, ymax - ymin, 1);
+    const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2;
+    const sx = (x: number) => W / 2 + (x - cx) / span * (W - 2 * pad);
+    const sy = (y: number) => H / 2 + (y - cy) / span * (H - 2 * pad);
+    // draw past trail (fading)
+    const trailLen = 6;
+    for (let dt = trailLen - 1; dt >= 1; dt--) {
+      const ti = (t - dt + pts.length) % pts.length;
+      const alpha = 0.08 * (trailLen - dt) / trailLen;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = `hsl(${(idx * 360 / 25)}, 70%, 50%)`;
+      for (const p of pts[ti]) {
+        ctx.beginPath(); ctx.arc(sx(p[0]), sy(p[1]), 1.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    // current frame
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = `hsl(${(idx * 360 / 25)}, 70%, 60%)`;
+    for (const p of pts[t]) {
+      ctx.beginPath(); ctx.arc(sx(p[0]), sy(p[1]), 1.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1.0;
+  }, [pts, t, idx]);
+  return (
+    <div style={{ display: "inline-block", margin: 4, textAlign: "center" }}>
+      <canvas ref={ref} width={W} height={H} style={{ background: "#0a0a0a", border: "1px solid #222" }} />
+      <div style={{ fontSize: 10, color: "#aaa", marginTop: 2 }}>{name}</div>
+      <div style={{ fontSize: 9, color: "#666" }}>cos={cos.toFixed(2)}</div>
+    </div>
+  );
+}
+
+function MotionGrid({ data }: { data: Repr }) {
+  const [t, setT] = useState(0);
+  const [playing, setPlaying] = useState(true);
+  const [fps, setFps] = useState(8);
+  const T = data.motion ? data.motion[0].length : 32;
+  useEffect(() => {
+    if (!playing) return;
+    const id = setInterval(() => setT(prev => (prev + 1) % T), 1000 / fps);
+    return () => clearInterval(id);
+  }, [playing, fps, T]);
+  if (!data.motion || !data.motion_cos) return null;
+  return (
+    <div>
+      <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
+        Per-class motion (closest train sample to class mean, 32 frames)
+      </div>
+      <div style={{ fontSize: 11, color: "#999", marginBottom: 8 }}>
+        XY projection of 64 sampled points + fading trail. cos = sample's stage5 alignment with class centroid.
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+        <button onClick={() => setPlaying(p => !p)} style={{ padding: "4px 10px", background: "#222", color: "#fff", border: "1px solid #444", cursor: "pointer" }}>
+          {playing ? "pause" : "play"}
+        </button>
+        <span style={{ fontSize: 11, color: "#aaa" }}>frame</span>
+        <input type="range" min={0} max={T - 1} value={t} onChange={e => { setPlaying(false); setT(parseInt(e.target.value)); }} style={{ width: 200 }} />
+        <span style={{ fontSize: 11, color: "#fff", minWidth: 40 }}>{t + 1} / {T}</span>
+        <span style={{ fontSize: 11, color: "#aaa", marginLeft: 12 }}>fps</span>
+        <input type="range" min={1} max={30} value={fps} onChange={e => setFps(parseInt(e.target.value))} style={{ width: 100 }} />
+        <span style={{ fontSize: 11, color: "#fff", minWidth: 30 }}>{fps}</span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap" }}>
+        {data.motion.map((m, i) => (
+          <MotionCell key={i} pts={m} name={data.class_names[i]} cos={data.motion_cos![i]} idx={i} t={t} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function cosineSim(a: number[], b: number[]): number {
   let dot = 0, na = 0, nb = 0;
@@ -202,6 +292,10 @@ export default function ExtractionPage() {
 
       <div style={{ marginTop: 16 }}>
         <Scatter data={data} />
+      </div>
+
+      <div style={{ marginTop: 24 }}>
+        <MotionGrid data={data} />
       </div>
 
       <div style={{ marginTop: 24 }}>
