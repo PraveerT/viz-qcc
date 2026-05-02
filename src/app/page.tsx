@@ -831,6 +831,7 @@ export default function Page() {
         zIndex: 10,
         maxWidth: 360,
       }}>
+        <a href="/extraction" style={{ display: 'inline-block', marginBottom: 6, fontSize: 11, color: '#6af', textDecoration: 'underline' }}>+ extraction (class reps)</a>
         <div style={{ fontSize: 14, fontWeight: 700 }}>
           Class {data.target_class}: {data.class_names[data.target_class]}
         </div>
