@@ -10,6 +10,9 @@ type Sample = {
   duo_xyz: number[][][];
   kin_uvd: number[][][];
   duo_uvd: number[][][];
+  raw_depth?: string[];        // base64 jpg, 16 frames
+  raw_duo_left?: string[];
+  raw_duo_right?: string[];
 };
 
 type Data = {
@@ -17,7 +20,25 @@ type Data = {
   samples: Sample[];
   frames_per_sample: number;
   points_per_frame: number;
+  raw_frames_per_clip?: number;
 };
+
+function VideoStrip({ frames, label, t }: { frames: string[]; label: string; t: number }) {
+  const T = frames.length;
+  if (T === 0) return null;
+  const idx = Math.floor((t / 32) * T) % T;
+  return (
+    <div style={{ display: "inline-block", margin: 6, textAlign: "center" }}>
+      <div style={{ fontSize: 11, color: "#aaa", marginBottom: 4 }}>{label}</div>
+      <img
+        src={`data:image/jpeg;base64,${frames[idx]}`}
+        style={{ width: 200, height: 150, imageRendering: "pixelated", background: "#000", border: "1px solid #333" }}
+        alt={`${label} ${idx + 1}/${T}`}
+      />
+      <div style={{ fontSize: 10, color: "#666", marginTop: 2 }}>frame {idx + 1}/{T}</div>
+    </div>
+  );
+}
 
 function PointCloudPanel({ pts, t, title, projection }: {
   pts: number[][][]; t: number; title: string; projection: "XY" | "XZ" | "YZ" | "UV";
@@ -159,6 +180,13 @@ export default function DuoVsKinectPage() {
           title={`DUO — ${usePixel ? 'pixel uvd' : 'Cartesian XYZ (cm via stereo)'}`}
           projection={proj}
         />
+      </div>
+
+      <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid #333" }}>
+        <div style={{ fontSize: 12, color: "#aaa", marginBottom: 6 }}>Raw video sources for this sample:</div>
+        {sample.raw_depth && <VideoStrip frames={sample.raw_depth} label="sk_depth.avi (Kinect depth)" t={t} />}
+        {sample.raw_duo_left && <VideoStrip frames={sample.raw_duo_left} label="duo_left.avi (DUO stereo L)" t={t} />}
+        {sample.raw_duo_right && <VideoStrip frames={sample.raw_duo_right} label="duo_right.avi (DUO stereo R)" t={t} />}
       </div>
 
       <div style={{ marginTop: 12, fontSize: 12, color: "#999" }}>
