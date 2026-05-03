@@ -833,6 +833,7 @@ export default function Page() {
       }}>
         <a href="/extraction" style={{ display: 'inline-block', marginBottom: 6, fontSize: 11, color: '#6af', textDecoration: 'underline' }}>+ extraction (class reps)</a>
         <a href="/c4-vs-c17" style={{ display: 'inline-block', marginBottom: 6, marginLeft: 8, fontSize: 11, color: '#fde047', textDecoration: 'underline' }}>+ c4 vs c17 game</a>
+        <a href="/duo-vs-kinect" style={{ display: 'inline-block', marginBottom: 6, marginLeft: 8, fontSize: 11, color: '#a8e', textDecoration: 'underline' }}>+ duo vs kinect</a>
         <div style={{ fontSize: 14, fontWeight: 700 }}>
           Class {data.target_class}: {data.class_names[data.target_class]}
         </div>
