@@ -79,7 +79,7 @@ export default function GamePage() {
     setPicked(side);
     const correct = side === pair[2];
     setScore(s => ({ correct: s.correct + (correct ? 1 : 0), total: s.total + 1 }));
-    setHistory(h => [{ correct, pair: [pair[0].sample_id, pair[1].sample_id] }, ...h].slice(0, 20));
+    setHistory(h => [{ correct, pair: [pair[0].sample_id, pair[1].sample_id] as [string, string] }, ...h].slice(0, 20));
   };
 
   const next = () => {
