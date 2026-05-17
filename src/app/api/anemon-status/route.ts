@@ -1,33 +1,20 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import fs from "node:fs/promises";
 
-const DEFAULT_API = process.env.ANEMON_API_URL
-  ?? "https://providence-easily-assignment-guaranteed.trycloudflare.com";
+const STORE = "/tmp/anemon_status.json";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-export async function GET(req: NextRequest) {
-  const params = req.nextUrl.searchParams;
-  const override = params.get("api");
-  const base = (override ?? DEFAULT_API).replace(/\/+$/, "");
-
+export async function GET() {
   try {
-    const r = await fetch(`${base}/api/status`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(8000),
+    const raw = await fs.readFile(STORE, "utf-8");
+    const { received_at, payload } = JSON.parse(raw);
+    const ageSec = Math.round((Date.now() - received_at) / 1000);
+    return NextResponse.json({ ...payload, _publisher_age_sec: ageSec }, {
+      headers: { "Cache-Control": "no-store" },
     });
-    if (!r.ok) {
-      return NextResponse.json(
-        { error: `upstream HTTP ${r.status}`, base },
-        { status: 502 }
-      );
-    }
-    const body = await r.text();
-    return new NextResponse(body, {
-      status: 200,
-      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
-    });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: msg, base }, { status: 502 });
+  } catch {
+    return NextResponse.json({ error: "no data yet — publisher not running" }, { status: 503 });
   }
 }
