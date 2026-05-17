@@ -2,10 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 
-const DEFAULT_API = ""; // unused since we proxy via /api/anemon-status (push-based)
 const STORAGE_KEY = "anemon_api_url";
 const POLL_MS = 10000;
-const RECENT_EPOCHS = 5;
+const RECENT_EPOCHS = 12;
 
 type EpochRow = {
   ep: number;
@@ -46,7 +45,7 @@ function Bar({ pct, warn = 70, bad = 90 }: { pct: number; warn?: number; bad?: n
   const clamped = Math.max(0, Math.min(100, pct));
   const color = clamped >= bad ? "#f66" : clamped >= warn ? "#fb6" : "#6bf";
   return (
-    <div style={{ background: "#141414", height: 5, borderRadius: 3, overflow: "hidden", marginTop: 2 }}>
+    <div style={{ background: "#141414", height: 6, borderRadius: 3, overflow: "hidden", marginTop: 3 }}>
       <div style={{ width: `${clamped}%`, height: "100%", background: color, transition: "width 0.3s" }} />
     </div>
   );
@@ -54,9 +53,9 @@ function Bar({ pct, warn = 70, bad = 90 }: { pct: number; warn?: number; bad?: n
 
 function KV({ k, v, color }: { k: string; v: string; color?: string }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", minWidth: 60 }}>
-      <span style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.5px" }}>{k}</span>
-      <span style={{ fontSize: 13, fontWeight: 600, color: color || "#e8e8e8" }}>{v}</span>
+    <div style={{ display: "flex", flexDirection: "column", minWidth: 70 }}>
+      <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px" }}>{k}</span>
+      <span style={{ fontSize: 14, fontWeight: 600, color: color || "#e8e8e8" }}>{v}</span>
     </div>
   );
 }
@@ -65,12 +64,12 @@ function CompactTable({ rows }: { rows: LBRow[] }) {
   if (!rows || rows.length === 0) return null;
   const cols = Object.keys(rows[0]);
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5, tableLayout: "fixed" }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, tableLayout: "fixed" }}>
       <thead>
         <tr>
           {cols.map((c, i) => (
             <th key={c} style={{
-              padding: "2px 4px",
+              padding: "3px 4px",
               textAlign: i === cols.length - 1 ? "right" : "left",
               color: "#888",
               fontWeight: 500,
@@ -90,12 +89,12 @@ function CompactTable({ rows }: { rows: LBRow[] }) {
               const isAcc = i === cols.length - 1 && /^[\d.]+$/.test(v);
               return (
                 <td key={c} style={{
-                  padding: "2px 4px",
+                  padding: "3px 4px",
                   textAlign: i === cols.length - 1 ? "right" : "left",
                   color: isAcc ? "#6f9" : "#d0d0d0",
                   fontWeight: isAcc ? 600 : 400,
                   wordBreak: "break-word",
-                  lineHeight: 1.25,
+                  lineHeight: 1.3,
                   verticalAlign: "top",
                 }}>{v}</td>
               );
@@ -108,13 +107,25 @@ function CompactTable({ rows }: { rows: LBRow[] }) {
 }
 
 export default function AnemonPage() {
-  const [apiUrl] = useState<string>(DEFAULT_API);
   const [status, setStatus] = useState<Status | null>(null);
   const [lastOk, setLastOk] = useState<number | null>(null);
   const [, setErr] = useState<string | null>(null);
   const [ago, setAgo] = useState<string>("…");
 
-  // Honor any ?api=<url> override and persist (legacy support; default uses Railway-proxy).
+  // Lock the browser so the page itself can't scroll.
+  useEffect(() => {
+    const prevHtml = document.documentElement.style.cssText;
+    const prevBody = document.body.style.cssText;
+    document.documentElement.style.cssText =
+      "height:100%;overflow:hidden;overscroll-behavior:none;background:#0a0a0a;";
+    document.body.style.cssText =
+      "height:100%;margin:0;overflow:hidden;overscroll-behavior:none;background:#0a0a0a;position:fixed;inset:0;touch-action:none;";
+    return () => {
+      document.documentElement.style.cssText = prevHtml;
+      document.body.style.cssText = prevBody;
+    };
+  }, []);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const fromQuery = params.get("api");
@@ -137,7 +148,7 @@ export default function AnemonPage() {
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [apiUrl]);
+  }, []);
 
   useEffect(() => {
     fetchStatus();
@@ -161,63 +172,72 @@ export default function AnemonPage() {
 
   return (
     <main style={{
-      height: "100vh",
-      overflow: "hidden",
+      position: "fixed",
+      inset: 0,
       background: "#0a0a0a",
       color: "#e8e8e8",
-      font: "13px/1.4 ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
+      font: "13px/1.45 ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
       padding: "env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)",
       boxSizing: "border-box",
       display: "flex",
       flexDirection: "column",
+      overflow: "hidden",
+      overscrollBehavior: "none",
+      touchAction: "none",
     }}>
-      <header style={{ padding: "10px 14px 4px", display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-        <h1 style={{ font: "600 14px/1 inherit", margin: 0, letterSpacing: "0.5px" }}>
+      <header style={{ padding: "14px 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexShrink: 0 }}>
+        <h1 style={{ font: "600 16px/1 inherit", margin: 0, letterSpacing: "0.5px" }}>
           ANEMON · <span style={{ color: "#6bf" }}>{status?.run ?? "—"}</span>
         </h1>
-        <span style={{ fontSize: 10, color: stale ? "#fb6" : "#888" }}>{ago}</span>
+        <span style={{ fontSize: 11, color: stale ? "#fb6" : "#888" }}>{ago}</span>
       </header>
 
-      <section style={{ padding: "6px 14px", borderTop: "1px solid #252525" }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+      <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           <KV k="epoch" v={status?.now?.ep != null ? String(status.now.ep) : "—"} />
           <KV k="batch" v={status?.now?.batch ?? "—"} />
-          <KV k="best" v={status?.best ? `${fmt(status.best.p1, 2)}% (ep ${status.best.ep})` : "—"} color="#6f9" />
+          <KV k="best p1" v={status?.best ? `${fmt(status.best.p1, 2)}% (ep ${status.best.ep})` : "—"} color="#6f9" />
           <KV k="last p1" v={last ? `${fmt(last.te_p1, 2)}%` : "—"} />
           <KV k="last p5" v={last ? `${fmt(last.te_p5, 2)}%` : "—"} />
         </div>
       </section>
 
-      <section style={{ padding: "6px 14px", borderTop: "1px solid #252525" }}>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 140 }}>
-            <KV k="gpu" v={status?.gpu ? `${fmt(status.gpu.used_gb, 1)} / ${fmt(status.gpu.total_gb, 1)} GB · ${status.gpu.util_pct}%` : "—"} />
+      <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <KV k="gpu mem" v={status?.gpu ? `${fmt(status.gpu.used_gb, 1)} / ${fmt(status.gpu.total_gb, 1)} GB` : "—"} />
             {status?.gpu && <Bar pct={(status.gpu.used_gb / status.gpu.total_gb) * 100} warn={80} bad={95} />}
           </div>
-          <div style={{ flex: 1, minWidth: 100 }}>
-            <KV k="ram" v={status?.ram ? `${status.ram.used_gb}/${status.ram.total_gb} GB` : "—"} />
+          <div style={{ flex: 1, minWidth: 130 }}>
+            <KV k="gpu util" v={status?.gpu ? `${status.gpu.util_pct}%` : "—"} />
+            {status?.gpu && <Bar pct={status.gpu.util_pct} warn={101} bad={102} />}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10 }}>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <KV k="ram" v={status?.ram ? `${status.ram.used_gb} / ${status.ram.total_gb} GB` : "—"} />
             {status?.ram && <Bar pct={(status.ram.used_gb / status.ram.total_gb) * 100} />}
           </div>
-          <div style={{ flex: 1, minWidth: 100 }}>
-            <KV k="disk" v={status?.disk ? `${fmt(status.disk.used_gb, 1)}/${status.disk.total_gb} GB` : "—"} />
+          <div style={{ flex: 1, minWidth: 130 }}>
+            <KV k="disk" v={status?.disk ? `${fmt(status.disk.used_gb, 1)} / ${status.disk.total_gb} GB` : "—"} />
             {status?.disk && <Bar pct={(status.disk.used_gb / status.disk.total_gb) * 100} />}
           </div>
         </div>
       </section>
 
-      <section style={{ padding: "6px 14px", borderTop: "1px solid #252525" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+      <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr>
               {["ep", "tr%", "loss", "te p1", "te p5"].map((h, i) => (
                 <th key={h} style={{
-                  padding: "2px 4px",
+                  padding: "4px 6px",
                   textAlign: i === 0 ? "left" : "right",
                   color: "#888",
                   fontWeight: 500,
                   textTransform: "uppercase",
                   letterSpacing: "0.4px",
-                  fontSize: 9,
+                  fontSize: 10,
                   borderBottom: "1px solid #252525",
                 }}>{h}</th>
               ))}
@@ -230,9 +250,9 @@ export default function AnemonPage() {
               const weight = isBest ? 700 : 400;
               return (
                 <tr key={e.ep}>
-                  {[String(e.ep), fmt(e.tr_acc, 1), fmt(e.tr_loss, 2), fmt(e.te_p1, 2), fmt(e.te_p5, 2)].map((v, i) => (
+                  {[String(e.ep), fmt(e.tr_acc, 1), fmt(e.tr_loss, 3), fmt(e.te_p1, 2), fmt(e.te_p5, 2)].map((v, i) => (
                     <td key={i} style={{
-                      padding: "2px 4px",
+                      padding: "4px 6px",
                       textAlign: i === 0 ? "left" : "right",
                       color, fontWeight: weight,
                     }}>{v}</td>
@@ -245,8 +265,8 @@ export default function AnemonPage() {
       </section>
 
       {status?.leaderboard?.["Top combo per fusion width (with DSN)"]?.[0] && (
-        <section style={{ padding: "6px 14px", borderTop: "1px solid #252525", flex: 1, minHeight: 0, overflow: "hidden" }}>
-          <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 4 }}>top by fusion width</div>
+        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+          <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>top by fusion width</div>
           <CompactTable rows={status.leaderboard["Top combo per fusion width (with DSN)"][0]} />
         </section>
       )}
