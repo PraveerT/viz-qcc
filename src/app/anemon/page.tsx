@@ -74,7 +74,8 @@ export default function AnemonPage() {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const r = await fetch(`${apiUrl}/api/status`, { cache: "no-store" });
+      const q = apiUrl && apiUrl !== DEFAULT_API ? `?api=${encodeURIComponent(apiUrl)}` : "";
+      const r = await fetch(`/api/anemon-status${q}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data: Status = await r.json();
       setStatus(data);
