@@ -1,0 +1,228 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+
+const DEFAULT_API = "https://providence-easily-assignment-guaranteed.trycloudflare.com";
+const STORAGE_KEY = "anemon_api_url";
+const POLL_MS = 10000;
+
+type EpochRow = {
+  ep: number;
+  tr_acc: number | null;
+  tr_loss: number | null;
+  te_p1: number | null;
+  te_p5: number | null;
+};
+
+type Status = {
+  ts?: string;
+  run?: string;
+  log?: string;
+  gpu?: { used_gb: number; total_gb: number; util_pct: number } | null;
+  ram?: { used_gb: number; total_gb: number } | null;
+  disk?: { used_gb: number; total_gb: number } | null;
+  epochs?: EpochRow[];
+  best?: { ep: number; p1: number } | null;
+  now?: { ep?: number; batch?: string };
+};
+
+const fmt = (n: number | null | undefined, d = 1) =>
+  n == null || Number.isNaN(n) ? "—" : Number(n).toFixed(d);
+
+function Bar({ pct, warn = 70, bad = 90 }: { pct: number; warn?: number; bad?: number }) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  const color = clamped >= bad ? "#f66" : clamped >= warn ? "#fb6" : "#6bf";
+  return (
+    <div style={{ background: "#141414", height: 6, borderRadius: 3, overflow: "hidden", marginTop: 3 }}>
+      <div style={{ width: `${clamped}%`, height: "100%", background: color, transition: "width 0.3s" }} />
+    </div>
+  );
+}
+
+function KV({ k, v, color }: { k: string; v: string; color?: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minWidth: 70 }}>
+      <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px" }}>{k}</span>
+      <span style={{ fontSize: 14, fontWeight: 600, color: color || "#e8e8e8" }}>{v}</span>
+    </div>
+  );
+}
+
+export default function AnemonPage() {
+  const [apiUrl, setApiUrl] = useState<string>(DEFAULT_API);
+  const [status, setStatus] = useState<Status | null>(null);
+  const [lastOk, setLastOk] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [ago, setAgo] = useState<string>("…");
+  const [editing, setEditing] = useState<boolean>(false);
+  const [draft, setDraft] = useState<string>("");
+
+  // Init: read query param ?api=..., else localStorage, else default.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = params.get("api");
+    if (fromQuery) {
+      localStorage.setItem(STORAGE_KEY, fromQuery);
+      setApiUrl(fromQuery);
+      // strip query param from URL for cleanliness
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) setApiUrl(stored);
+  }, []);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const r = await fetch(`${apiUrl}/api/status`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data: Status = await r.json();
+      setStatus(data);
+      setLastOk(Date.now());
+      setErr(null);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, [apiUrl]);
+
+  useEffect(() => {
+    fetchStatus();
+    const id = setInterval(fetchStatus, POLL_MS);
+    return () => clearInterval(id);
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!lastOk) { setAgo("…"); return; }
+      const s = Math.round((Date.now() - lastOk) / 1000);
+      setAgo(s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m ${s % 60}s ago`);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [lastOk]);
+
+  const saveUrl = () => {
+    const v = draft.trim().replace(/\/+$/, "");
+    if (!v) return;
+    localStorage.setItem(STORAGE_KEY, v);
+    setApiUrl(v);
+    setEditing(false);
+  };
+
+  const last = status?.epochs && status.epochs.length > 0 ? status.epochs[status.epochs.length - 1] : null;
+  const bestEp = status?.best?.ep;
+  const stale = lastOk != null && (Date.now() - lastOk) / 1000 > 30;
+
+  return (
+    <main style={{
+      minHeight: "100vh",
+      background: "#0a0a0a",
+      color: "#e8e8e8",
+      font: "13px/1.45 ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
+      padding: "env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)",
+    }}>
+      <header style={{ padding: "14px 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <h1 style={{ font: "600 16px/1 inherit", margin: 0, letterSpacing: "0.5px" }}>
+          ANEMON · <span style={{ color: "#6bf" }}>{status?.run ?? "—"}</span>
+        </h1>
+        <span style={{ fontSize: 11, color: stale ? "#fb6" : "#888" }}>{ago}</span>
+      </header>
+
+      <section style={{ padding: "8px 16px", borderTop: "1px solid #252525" }}>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <KV k="epoch" v={status?.now?.ep != null ? String(status.now.ep) : "—"} />
+          <KV k="batch" v={status?.now?.batch ?? "—"} />
+          <KV k="best p1" v={status?.best ? `${fmt(status.best.p1, 2)}% (ep ${status.best.ep})` : "—"} color="#6f9" />
+          <KV k="last p1" v={last ? `${fmt(last.te_p1, 2)}%` : "—"} />
+          <KV k="last p5" v={last ? `${fmt(last.te_p5, 2)}%` : "—"} />
+        </div>
+      </section>
+
+      <section style={{ padding: "8px 16px", borderTop: "1px solid #252525" }}>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <KV k="gpu mem" v={status?.gpu ? `${fmt(status.gpu.used_gb, 1)} / ${fmt(status.gpu.total_gb, 1)} GB` : "—"} />
+            {status?.gpu && <Bar pct={(status.gpu.used_gb / status.gpu.total_gb) * 100} warn={80} bad={95} />}
+          </div>
+          <div style={{ flex: 1, minWidth: 130 }}>
+            <KV k="gpu util" v={status?.gpu ? `${status.gpu.util_pct}%` : "—"} />
+            {status?.gpu && <Bar pct={status.gpu.util_pct} warn={101} bad={102} />}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10 }}>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <KV k="ram" v={status?.ram ? `${status.ram.used_gb} / ${status.ram.total_gb} GB` : "—"} />
+            {status?.ram && <Bar pct={(status.ram.used_gb / status.ram.total_gb) * 100} />}
+          </div>
+          <div style={{ flex: 1, minWidth: 130 }}>
+            <KV k="disk" v={status?.disk ? `${fmt(status.disk.used_gb, 1)} / ${status.disk.total_gb} GB` : "—"} />
+            {status?.disk && <Bar pct={(status.disk.used_gb / status.disk.total_gb) * 100} />}
+          </div>
+        </div>
+      </section>
+
+      <section style={{ padding: "8px 16px", borderTop: "1px solid #252525" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr>
+              {["ep", "tr%", "loss", "te p1", "te p5"].map((h, i) => (
+                <th key={h} style={{
+                  padding: "4px 6px",
+                  textAlign: i === 0 ? "left" : "right",
+                  color: "#888",
+                  fontWeight: 500,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.4px",
+                  fontSize: 10,
+                  borderBottom: "1px solid #252525",
+                }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(status?.epochs ?? []).slice().reverse().map((e) => {
+              const isBest = e.ep === bestEp;
+              const color = isBest ? "#6f9" : "#e8e8e8";
+              const weight = isBest ? 700 : 400;
+              return (
+                <tr key={e.ep}>
+                  {[String(e.ep), fmt(e.tr_acc, 1), fmt(e.tr_loss, 3), fmt(e.te_p1, 2), fmt(e.te_p5, 2)].map((v, i) => (
+                    <td key={i} style={{
+                      padding: "4px 6px",
+                      textAlign: i === 0 ? "left" : "right",
+                      color, fontWeight: weight,
+                    }}>{v}</td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </section>
+
+      <section style={{ padding: "10px 16px 20px", borderTop: "1px solid #252525", color: "#888", fontSize: 11 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+          <span style={{ color: err ? "#f66" : "#888" }}>
+            {err ? `fetch error: ${err}` : status?.ts ? `updated ${status.ts}` : "connecting…"}
+          </span>
+          <button
+            onClick={() => { setDraft(apiUrl); setEditing(true); }}
+            style={{ background: "transparent", color: "#6bf", border: "1px solid #252525", padding: "4px 8px", borderRadius: 4, font: "inherit", cursor: "pointer" }}
+          >api</button>
+        </div>
+        <div style={{ marginTop: 6, fontSize: 10, color: "#666", wordBreak: "break-all" }}>{apiUrl}</div>
+        {editing && (
+          <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              style={{ flex: 1, background: "#0a0a0a", color: "#e8e8e8", border: "1px solid #252525", padding: "6px 8px", borderRadius: 4, font: "inherit" }}
+              placeholder="https://...trycloudflare.com"
+            />
+            <button onClick={saveUrl} style={{ background: "#6bf", color: "#0a0a0a", border: "none", padding: "6px 10px", borderRadius: 4, font: "inherit", fontWeight: 600, cursor: "pointer" }}>save</button>
+            <button onClick={() => setEditing(false)} style={{ background: "transparent", color: "#888", border: "1px solid #252525", padding: "6px 10px", borderRadius: 4, font: "inherit", cursor: "pointer" }}>x</button>
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
