@@ -14,6 +14,9 @@ type EpochRow = {
   te_p5: number | null;
 };
 
+type LBRow = Record<string, string>;
+type Leaderboard = Record<string, LBRow[][]> | null | undefined;
+
 type Status = {
   ts?: string;
   run?: string;
@@ -24,8 +27,63 @@ type Status = {
   epochs?: EpochRow[];
   best?: { ep: number; p1: number } | null;
   now?: { ep?: number; batch?: string };
-  leaderboard_md?: string | null;
+  leaderboard?: Leaderboard;
 };
+
+function stripMd(s: string): string {
+  // Strip bold markers + parenthetical inline notes "(...)".
+  return s
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/\s*\*\([^)]*\)\*/g, "")
+    .trim();
+}
+
+function CompactTable({ rows }: { rows: LBRow[] }) {
+  if (!rows || rows.length === 0) return null;
+  const cols = Object.keys(rows[0]);
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5, tableLayout: "fixed" }}>
+      <thead>
+        <tr>
+          {cols.map((c, i) => (
+            <th key={c} style={{
+              padding: "3px 4px",
+              textAlign: i === cols.length - 1 ? "right" : "left",
+              color: "#888",
+              fontWeight: 500,
+              textTransform: "uppercase",
+              letterSpacing: "0.4px",
+              fontSize: 9,
+              borderBottom: "1px solid #252525",
+            }}>{c}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, ri) => (
+          <tr key={ri}>
+            {cols.map((c, i) => {
+              const v = stripMd(r[c] ?? "");
+              const isAcc = i === cols.length - 1 && /^[\d.]+$/.test(v);
+              return (
+                <td key={c} style={{
+                  padding: "3px 4px",
+                  textAlign: i === cols.length - 1 ? "right" : "left",
+                  color: isAcc ? "#6f9" : "#d0d0d0",
+                  fontWeight: isAcc ? 600 : 400,
+                  wordBreak: "break-word",
+                  lineHeight: 1.3,
+                  verticalAlign: "top",
+                }}>{v}</td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 const fmt = (n: number | null | undefined, d = 1) =>
   n == null || Number.isNaN(n) ? "—" : Number(n).toFixed(d);
@@ -201,24 +259,18 @@ export default function AnemonPage() {
         </table>
       </section>
 
-      {status?.leaderboard_md && (
-        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525" }}>
-          <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>leaderboard</div>
-          <pre style={{
-            margin: 0,
-            fontSize: 11,
-            lineHeight: 1.45,
-            color: "#d0d0d0",
-            background: "#0d0d0d",
-            border: "1px solid #252525",
-            borderRadius: 6,
-            padding: 10,
-            overflowX: "auto",
-            whiteSpace: "pre",
-            fontFamily: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
-          }}>{status.leaderboard_md}</pre>
-        </section>
-      )}
+      {status?.leaderboard && Object.entries(status.leaderboard).map(([heading, tables]) => (
+        tables.length === 0 ? null : (
+          <section key={heading} style={{ padding: "8px 16px", borderTop: "1px solid #252525" }}>
+            <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>{heading}</div>
+            {tables.map((rows, ti) => (
+              <div key={ti} style={{ marginBottom: ti === tables.length - 1 ? 0 : 8 }}>
+                <CompactTable rows={rows} />
+              </div>
+            ))}
+          </section>
+        )
+      ))}
 
       <section style={{ padding: "10px 16px 20px", borderTop: "1px solid #252525", color: "#888", fontSize: 11 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
