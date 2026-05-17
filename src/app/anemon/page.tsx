@@ -259,18 +259,12 @@ export default function AnemonPage() {
         </table>
       </section>
 
-      {status?.leaderboard && Object.entries(status.leaderboard).map(([heading, tables]) => (
-        tables.length === 0 ? null : (
-          <section key={heading} style={{ padding: "8px 16px", borderTop: "1px solid #252525" }}>
-            <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>{heading}</div>
-            {tables.map((rows, ti) => (
-              <div key={ti} style={{ marginBottom: ti === tables.length - 1 ? 0 : 8 }}>
-                <CompactTable rows={rows} />
-              </div>
-            ))}
-          </section>
-        )
-      ))}
+      {status?.leaderboard?.["Top combo per fusion width (with DSN)"]?.[0] && (
+        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525" }}>
+          <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>top 5 by fusion width</div>
+          <CompactTable rows={status.leaderboard["Top combo per fusion width (with DSN)"][0]} />
+        </section>
+      )}
 
       <section style={{ padding: "10px 16px 20px", borderTop: "1px solid #252525", color: "#888", fontSize: 11 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
