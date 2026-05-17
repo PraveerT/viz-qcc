@@ -1,0 +1,14 @@
+{
+  "name": "Anemon Training Monitor",
+  "short_name": "Anemon",
+  "start_url": "/anemon",
+  "scope": "/anemon",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    { "src": "/anemon-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/anemon-icon.png",     "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

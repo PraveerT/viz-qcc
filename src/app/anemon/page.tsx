@@ -24,6 +24,7 @@ type Status = {
   epochs?: EpochRow[];
   best?: { ep: number; p1: number } | null;
   now?: { ep?: number; batch?: string };
+  leaderboard_md?: string | null;
 };
 
 const fmt = (n: number | null | undefined, d = 1) =>
@@ -199,6 +200,25 @@ export default function AnemonPage() {
           </tbody>
         </table>
       </section>
+
+      {status?.leaderboard_md && (
+        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525" }}>
+          <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>leaderboard</div>
+          <pre style={{
+            margin: 0,
+            fontSize: 11,
+            lineHeight: 1.45,
+            color: "#d0d0d0",
+            background: "#0d0d0d",
+            border: "1px solid #252525",
+            borderRadius: 6,
+            padding: 10,
+            overflowX: "auto",
+            whiteSpace: "pre",
+            fontFamily: "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
+          }}>{status.leaderboard_md}</pre>
+        </section>
+      )}
 
       <section style={{ padding: "10px 16px 20px", borderTop: "1px solid #252525", color: "#888", fontSize: 11 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
