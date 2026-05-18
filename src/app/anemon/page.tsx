@@ -26,7 +26,7 @@ type Status = {
   disk?: { used_gb: number; total_gb: number } | null;
   epochs?: EpochRow[];
   best?: { ep: number; p1: number } | null;
-  now?: { ep?: number; batch?: string };
+  now?: { ep?: number; batch?: string; lr?: number | null };
   leaderboard?: Leaderboard;
 };
 
@@ -196,6 +196,7 @@ export default function AnemonPage() {
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           <KV k="epoch" v={status?.now?.ep != null ? String(status.now.ep) : "—"} />
           <KV k="batch" v={status?.now?.batch ?? "—"} />
+          <KV k="lr" v={status?.now?.lr != null ? status.now.lr.toExponential(1) : "—"} />
           <KV k="best p1" v={status?.best ? `${fmt(status.best.p1, 2)}% (ep ${status.best.ep})` : "—"} color="#6f9" />
           <KV k="last p1" v={last ? `${fmt(last.te_p1, 2)}%` : "—"} />
           <KV k="last p5" v={last ? `${fmt(last.te_p5, 2)}%` : "—"} />
