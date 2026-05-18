@@ -10,6 +10,7 @@ type EpochRow = {
   ep: number;
   tr_acc: number | null;
   tr_loss: number | null;
+  aux_loss?: number | null;
   te_p1: number | null;
   te_p5: number | null;
 };
@@ -227,42 +228,55 @@ export default function AnemonPage() {
       </section>
 
       <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr>
-              {["ep", "tr%", "loss", "te p1", "te p5"].map((h, i) => (
-                <th key={h} style={{
-                  padding: "4px 6px",
-                  textAlign: i === 0 ? "left" : "right",
-                  color: "#888",
-                  fontWeight: 500,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.4px",
-                  fontSize: 10,
-                  borderBottom: "1px solid #252525",
-                }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {recent.map((e) => {
-              const isBest = e.ep === bestEp;
-              const color = isBest ? "#6f9" : "#e8e8e8";
-              const weight = isBest ? 700 : 400;
-              return (
-                <tr key={e.ep}>
-                  {[String(e.ep), fmt(e.tr_acc, 1), fmt(e.tr_loss, 3), fmt(e.te_p1, 2), fmt(e.te_p5, 2)].map((v, i) => (
-                    <td key={i} style={{
+        {(() => {
+          const hasAux = recent.some(e => e.aux_loss != null);
+          const headers = hasAux
+            ? ["ep", "tr%", "loss", "aux", "te p1", "te p5"]
+            : ["ep", "tr%", "loss", "te p1", "te p5"];
+          const fmtAux = (v: number | null | undefined) =>
+            v == null || Number.isNaN(v) ? "—" : Number(v).toExponential(1);
+          return (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  {headers.map((h, i) => (
+                    <th key={h} style={{
                       padding: "4px 6px",
                       textAlign: i === 0 ? "left" : "right",
-                      color, fontWeight: weight,
-                    }}>{v}</td>
+                      color: "#888",
+                      fontWeight: 500,
+                      textTransform: "uppercase",
+                      letterSpacing: "0.4px",
+                      fontSize: 10,
+                      borderBottom: "1px solid #252525",
+                    }}>{h}</th>
                   ))}
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {recent.map((e) => {
+                  const isBest = e.ep === bestEp;
+                  const color = isBest ? "#6f9" : "#e8e8e8";
+                  const weight = isBest ? 700 : 400;
+                  const cells = hasAux
+                    ? [String(e.ep), fmt(e.tr_acc, 1), fmt(e.tr_loss, 3), fmtAux(e.aux_loss), fmt(e.te_p1, 2), fmt(e.te_p5, 2)]
+                    : [String(e.ep), fmt(e.tr_acc, 1), fmt(e.tr_loss, 3), fmt(e.te_p1, 2), fmt(e.te_p5, 2)];
+                  return (
+                    <tr key={e.ep}>
+                      {cells.map((v, i) => (
+                        <td key={i} style={{
+                          padding: "4px 6px",
+                          textAlign: i === 0 ? "left" : "right",
+                          color, fontWeight: weight,
+                        }}>{v}</td>
+                      ))}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          );
+        })()}
       </section>
 
       {status?.leaderboard?.["Top combo per fusion width (with DSN)"]?.[0] && (
