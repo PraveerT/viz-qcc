@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type Notes = { title?: string; body: string; updated_at: number };
 
@@ -77,7 +79,7 @@ export default function Page() {
           </h1>
           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
             updated {fmtAge(notes?.updated_at ?? 0)} · auto-refreshes every
-            10s · POST <code>/api/notes</code> to update
+            10s · POST <code>/api/notes</code> with markdown to update
           </div>
         </header>
 
@@ -98,61 +100,109 @@ export default function Page() {
         )}
 
         <article
+          className="md"
           style={{
             background: "#0f141b",
             border: "1px solid #1f2937",
             borderRadius: 8,
             padding: 18,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            fontFamily:
-              'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-            fontSize: 13,
-            lineHeight: 1.55,
+            fontSize: 14,
+            lineHeight: 1.6,
             minHeight: 200,
           }}
         >
           {!notes?.body?.length ? (
-            "no notes yet."
+            <span style={{ color: "#6b7280" }}>no notes yet.</span>
           ) : (
-            notes.body.split("\n").map((line, i) => {
-              // Markdown image: ![alt](url)
-              const img = line.match(/^!\[(.*?)\]\((.+?)\)$/);
-              if (img) {
-                return (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                img: (props) => (
                   <img
-                    key={i}
-                    src={img[2]}
-                    alt={img[1]}
+                    {...props}
                     style={{
                       maxWidth: "100%",
                       height: "auto",
                       display: "block",
-                      margin: "8px 0",
+                      margin: "10px 0",
                       borderRadius: 4,
                     }}
                   />
-                );
-              }
-              // Bare image URL on its own line
-              if (/^https?:\/\/\S+\.(gif|png|jpe?g|webp|svg)(\?.*)?$/i.test(line.trim())) {
-                return (
-                  <img
-                    key={i}
-                    src={line.trim()}
-                    alt=""
+                ),
+                a: (props) => (
+                  <a
+                    {...props}
+                    style={{ color: "#6bf", textDecoration: "underline" }}
+                    target="_blank"
+                    rel="noreferrer"
+                  />
+                ),
+                code: (props) => (
+                  <code
+                    {...props}
                     style={{
-                      maxWidth: "100%",
-                      height: "auto",
-                      display: "block",
-                      margin: "8px 0",
+                      background: "#141a22",
+                      padding: "1px 6px",
                       borderRadius: 4,
+                      fontSize: 12,
+                      fontFamily:
+                        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
                     }}
                   />
-                );
-              }
-              return <div key={i}>{line || " "}</div>;
-            })
+                ),
+                pre: (props) => (
+                  <pre
+                    {...props}
+                    style={{
+                      background: "#0a0f15",
+                      border: "1px solid #1f2937",
+                      padding: 12,
+                      borderRadius: 6,
+                      overflowX: "auto",
+                      fontSize: 12,
+                    }}
+                  />
+                ),
+                table: (props) => (
+                  <table
+                    {...props}
+                    style={{
+                      borderCollapse: "collapse",
+                      margin: "10px 0",
+                      fontSize: 13,
+                    }}
+                  />
+                ),
+                th: (props) => (
+                  <th
+                    {...props}
+                    style={{
+                      border: "1px solid #1f2937",
+                      padding: "6px 10px",
+                      background: "#141a22",
+                      textAlign: "left",
+                    }}
+                  />
+                ),
+                td: (props) => (
+                  <td
+                    {...props}
+                    style={{ border: "1px solid #1f2937", padding: "6px 10px" }}
+                  />
+                ),
+                h1: (props) => (
+                  <h1 {...props} style={{ fontSize: 20, margin: "16px 0 8px" }} />
+                ),
+                h2: (props) => (
+                  <h2 {...props} style={{ fontSize: 17, margin: "14px 0 6px" }} />
+                ),
+                h3: (props) => (
+                  <h3 {...props} style={{ fontSize: 15, margin: "12px 0 4px" }} />
+                ),
+              }}
+            >
+              {notes.body}
+            </ReactMarkdown>
           )}
         </article>
       </div>
