@@ -1,10 +1,12 @@
 export const dynamic = "force-static";
 
-const gifs = [
-  { src: "/canonical_sample_0_class0.gif", label: "sample 0 · class 0" },
-  { src: "/canonical_sample_1_class4.gif", label: "sample 1 · class 4" },
-  { src: "/canonical_sample_2_class12.gif", label: "sample 2 · class 12" },
-];
+const gifs = Array.from({ length: 12 }, (_, i) => {
+  const id = String(i).padStart(2, "0");
+  return {
+    src: `/canonical_sample_${id}_class${id}.gif`,
+    label: `class ${i}`,
+  };
+});
 
 export default function Page() {
   return (
@@ -18,27 +20,28 @@ export default function Page() {
           'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
       }}
     >
-      <header style={{ maxWidth: 980, margin: "0 auto 24px" }}>
+      <header style={{ maxWidth: 1400, margin: "0 auto 24px" }}>
         <h1 style={{ fontSize: 22, margin: 0, fontWeight: 600 }}>
-          AE canonical-correspondence check
+          AE canonical-correspondence check · 12 gestures
         </h1>
-        <p style={{ fontSize: 14, color: "#9ca3af", marginTop: 8 }}>
-          Left: raw NVGesture point cloud (random per-frame sub-sample, no
-          correspondence across frames). Right: AE decoder output of K=128
-          canonical points, each output index colored consistently across
-          frames. If correspondence holds, each color visually tracks a
-          hand region as the gesture progresses; if it doesn&apos;t, colors
-          wander randomly.
+        <p style={{ fontSize: 13, color: "#9ca3af", marginTop: 8 }}>
+          Per panel — left: raw NVGesture point cloud (random per-frame
+          sub-sample, no correspondence across frames). Right: AE decoder
+          output of K=512 canonical points, each output index colored
+          consistently across all 32 frames. If correspondence holds, each
+          color visually tracks a hand region as the gesture progresses;
+          if it doesn&apos;t, colors wander randomly. Same AE weights
+          applied to every sample — no per-class fine-tuning.
         </p>
       </header>
 
       <section
         style={{
-          maxWidth: 980,
+          maxWidth: 1400,
           margin: "0 auto",
           display: "grid",
-          gridTemplateColumns: "1fr",
-          gap: 18,
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: 14,
         }}
       >
         {gifs.map((g) => (
@@ -48,12 +51,12 @@ export default function Page() {
               margin: 0,
               background: "#0f141b",
               border: "1px solid #1f2937",
-              borderRadius: 10,
-              padding: 12,
+              borderRadius: 8,
+              padding: 10,
             }}
           >
             <figcaption
-              style={{ fontSize: 13, color: "#9ca3af", marginBottom: 8 }}
+              style={{ fontSize: 12, color: "#9ca3af", marginBottom: 6 }}
             >
               {g.label}
             </figcaption>
@@ -68,16 +71,17 @@ export default function Page() {
 
       <footer
         style={{
-          maxWidth: 980,
+          maxWidth: 1400,
           margin: "32px auto 0",
           fontSize: 12,
           color: "#6b7280",
         }}
       >
-        Generated from <code>work_dir/ae_pretrain/ae_pretrain.pt</code> on
-        the NVGesture test split (self-supervised pretrain only; no
-        classifier signal). Loss = chamfer + 0.5·temporal smoothness, 30
-        epochs.
+        AE architecture: per-point MLP encoder (no max-pool bottleneck) +
+        learnable-query cross-attention decoder. The K query embeddings
+        are shared across frames and samples — index k asks the same
+        question every time, which makes correspondence emerge from the
+        chamfer + temporal-smoothness training objective.
       </footer>
     </main>
   );
