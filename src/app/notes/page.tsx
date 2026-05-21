@@ -112,7 +112,48 @@ export default function Page() {
             minHeight: 200,
           }}
         >
-          {notes?.body?.length ? notes.body : "no notes yet."}
+          {!notes?.body?.length ? (
+            "no notes yet."
+          ) : (
+            notes.body.split("\n").map((line, i) => {
+              // Markdown image: ![alt](url)
+              const img = line.match(/^!\[(.*?)\]\((.+?)\)$/);
+              if (img) {
+                return (
+                  <img
+                    key={i}
+                    src={img[2]}
+                    alt={img[1]}
+                    style={{
+                      maxWidth: "100%",
+                      height: "auto",
+                      display: "block",
+                      margin: "8px 0",
+                      borderRadius: 4,
+                    }}
+                  />
+                );
+              }
+              // Bare image URL on its own line
+              if (/^https?:\/\/\S+\.(gif|png|jpe?g|webp|svg)(\?.*)?$/i.test(line.trim())) {
+                return (
+                  <img
+                    key={i}
+                    src={line.trim()}
+                    alt=""
+                    style={{
+                      maxWidth: "100%",
+                      height: "auto",
+                      display: "block",
+                      margin: "8px 0",
+                      borderRadius: 4,
+                    }}
+                  />
+                );
+              }
+              return <div key={i}>{line || " "}</div>;
+            })
+          )}
         </article>
       </div>
     </main>
