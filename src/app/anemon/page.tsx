@@ -285,6 +285,25 @@ export default function AnemonPage() {
           <CompactTable rows={status.leaderboard["Top combo per fusion width (with DSN)"][0]} />
         </section>
       )}
+
+      <section style={{ padding: "10px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+        <a
+          href="/notes"
+          style={{
+            display: "block",
+            textAlign: "center",
+            color: "#9ca3af",
+            textDecoration: "none",
+            fontSize: 12,
+            padding: "8px 12px",
+            border: "1px solid #1f2937",
+            borderRadius: 6,
+            background: "#0f141b",
+          }}
+        >
+          notes →
+        </a>
+      </section>
     </main>
   );
 }
