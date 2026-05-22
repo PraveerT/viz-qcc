@@ -35,7 +35,6 @@ type Status = {
     qcc_scale: number;
     quat_inject_norm: number;
     quat_inject_max: number;
-    coord_drift: number;
   } | null;
 };
 
@@ -331,10 +330,9 @@ export default function AnemonPage() {
               </span>
             </div>
             <div style={{ color: "#888" }}>max {status.qcc.quat_inject_max.toFixed(4)}</div>
-            <div style={{ color: "#888" }}>coord_drift {status.qcc.coord_drift.toFixed(4)}</div>
           </div>
           <div style={{ fontSize: 10, color: "#6b7280", marginTop: 4 }}>
-            qcc_scale: aux head magnitude (init 0). quat_inject: per-point quat channel weights (init 0). blue = used, red = dead.
+            qcc_scale: aux head magnitude (init 0). quat_inject: additive quat→coords bias (init 0). blue = used, red = dead.
           </div>
         </section>
       )}
