@@ -29,6 +29,7 @@ type Status = {
   best?: { ep: number; p1: number } | null;
   now?: { ep?: number; batch?: string; lr?: number | null };
   leaderboard?: Leaderboard;
+  engram?: { epoch: number; out_norm: number; out_max: number } | null;
 };
 
 const fmt = (n: number | null | undefined, d = 1) =>
@@ -283,6 +284,25 @@ export default function AnemonPage() {
         <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
           <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>top by fusion width</div>
           <CompactTable rows={status.leaderboard["Top combo per fusion width (with DSN)"][0]} />
+        </section>
+      )}
+
+      {status?.engram && (
+        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+          <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>engram aux contribution</div>
+          <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#e5e7eb" }}>
+            <div>ep {status.engram.epoch}</div>
+            <div>
+              out_proj norm{" "}
+              <span style={{ color: status.engram.out_norm > 0.01 ? "#6bf" : "#f88", fontWeight: 600 }}>
+                {status.engram.out_norm.toFixed(4)}
+              </span>
+            </div>
+            <div style={{ color: "#888" }}>max {status.engram.out_max.toFixed(4)}</div>
+          </div>
+          <div style={{ fontSize: 10, color: "#6b7280", marginTop: 4 }}>
+            zero-init residual; blue = contributing, red = suppressed
+          </div>
         </section>
       )}
 
