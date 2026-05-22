@@ -30,6 +30,13 @@ type Status = {
   now?: { ep?: number; batch?: string; lr?: number | null };
   leaderboard?: Leaderboard;
   engram?: { epoch: number; out_norm: number; out_max: number } | null;
+  qcc?: {
+    epoch: number;
+    qcc_scale: number;
+    quat_inject_norm: number;
+    quat_inject_max: number;
+    coord_drift: number;
+  } | null;
 };
 
 const fmt = (n: number | null | undefined, d = 1) =>
@@ -302,6 +309,32 @@ export default function AnemonPage() {
           </div>
           <div style={{ fontSize: 10, color: "#6b7280", marginTop: 4 }}>
             zero-init residual; blue = contributing, red = suppressed
+          </div>
+        </section>
+      )}
+
+      {status?.qcc && (
+        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+          <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>qcc mechanism usage</div>
+          <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#e5e7eb", flexWrap: "wrap" }}>
+            <div>ep {status.qcc.epoch}</div>
+            <div>
+              qcc_scale{" "}
+              <span style={{ color: Math.abs(status.qcc.qcc_scale) > 0.005 ? "#6bf" : "#f88", fontWeight: 600 }}>
+                {status.qcc.qcc_scale.toFixed(4)}
+              </span>
+            </div>
+            <div>
+              quat_inject norm{" "}
+              <span style={{ color: status.qcc.quat_inject_norm > 0.005 ? "#6bf" : "#f88", fontWeight: 600 }}>
+                {status.qcc.quat_inject_norm.toFixed(4)}
+              </span>
+            </div>
+            <div style={{ color: "#888" }}>max {status.qcc.quat_inject_max.toFixed(4)}</div>
+            <div style={{ color: "#888" }}>coord_drift {status.qcc.coord_drift.toFixed(4)}</div>
+          </div>
+          <div style={{ fontSize: 10, color: "#6b7280", marginTop: 4 }}>
+            qcc_scale: aux head magnitude (init 0). quat_inject: per-point quat channel weights (init 0). blue = used, red = dead.
           </div>
         </section>
       )}
