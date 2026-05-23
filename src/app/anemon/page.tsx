@@ -33,8 +33,9 @@ type Status = {
   qcc?: {
     epoch: number;
     qcc_scale: number;
-    quat_inject_norm: number;
-    quat_inject_max: number;
+    quat_inject_scale?: number;
+    quat_inject_norm?: number;
+    quat_inject_max?: number;
   } | null;
 };
 
@@ -323,16 +324,22 @@ export default function AnemonPage() {
                 {status.qcc.qcc_scale.toFixed(4)}
               </span>
             </div>
-            <div>
-              quat_inject norm{" "}
-              <span style={{ color: status.qcc.quat_inject_norm > 0.005 ? "#6bf" : "#f88", fontWeight: 600 }}>
-                {status.qcc.quat_inject_norm.toFixed(4)}
-              </span>
-            </div>
-            <div style={{ color: "#888" }}>max {status.qcc.quat_inject_max.toFixed(4)}</div>
+            {status.qcc.quat_inject_scale !== undefined && (
+              <div>
+                quat_inject_scale{" "}
+                <span style={{ color: Math.abs(status.qcc.quat_inject_scale) > 0.005 ? "#6bf" : "#f88", fontWeight: 600 }}>
+                  {status.qcc.quat_inject_scale.toFixed(4)}
+                </span>
+              </div>
+            )}
+            {status.qcc.quat_inject_norm !== undefined && (
+              <div style={{ color: "#888" }}>
+                proj_norm {status.qcc.quat_inject_norm.toFixed(4)}
+              </div>
+            )}
           </div>
           <div style={{ fontSize: 10, color: "#6b7280", marginTop: 4 }}>
-            qcc_scale: aux head magnitude (init 0). quat_inject: additive quat→coords bias (init 0). blue = used, red = dead.
+            qcc_scale: aux head gate (init 0). quat_inject_scale: post-Mamba quat residual gate (init 0). blue = used.
           </div>
         </section>
       )}
