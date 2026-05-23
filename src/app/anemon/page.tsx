@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 
 const STORAGE_KEY = "anemon_api_url";
+const VIEW_KEY = "anemon_view_mode";
 const POLL_MS = 10000;
 const RECENT_EPOCHS = 12;
 
@@ -69,6 +70,31 @@ function KV({ k, v, color }: { k: string; v: string; color?: string }) {
   );
 }
 
+function Sparkline({ values, color = "#6bf", bestIdx }: { values: number[]; color?: string; bestIdx?: number }) {
+  if (!values.length) return null;
+  const W = 200, H = 36, pad = 2;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = Math.max(max - min, 1e-6);
+  const dx = values.length > 1 ? (W - 2 * pad) / (values.length - 1) : 0;
+  const pts = values.map((v, i) => {
+    const x = pad + i * dx;
+    const y = H - pad - ((v - min) / range) * (H - 2 * pad);
+    return [x, y] as [number, number];
+  });
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: "block" }}>
+      <path d={d} stroke={color} strokeWidth={1.4} fill="none" />
+      {bestIdx != null && pts[bestIdx] && (
+        <circle cx={pts[bestIdx][0]} cy={pts[bestIdx][1]} r={2.5} fill="#6f9" />
+      )}
+      <text x={W - pad} y={10} fontSize="9" fill="#888" textAnchor="end">{max.toFixed(2)}</text>
+      <text x={W - pad} y={H - 2} fontSize="9" fill="#888" textAnchor="end">{min.toFixed(2)}</text>
+    </svg>
+  );
+}
+
 function CompactTable({ rows }: { rows: LBRow[] }) {
   if (!rows || rows.length === 0) return null;
   const cols = Object.keys(rows[0]);
@@ -118,6 +144,20 @@ function CompactTable({ rows }: { rows: LBRow[] }) {
 export default function AnemonPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [lastOk, setLastOk] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<"compact" | "detailed">("compact");
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem(VIEW_KEY);
+      if (saved === "detailed" || saved === "compact") setViewMode(saved);
+    }
+  }, []);
+  const toggleView = useCallback(() => {
+    setViewMode((m) => {
+      const next = m === "compact" ? "detailed" : "compact";
+      if (typeof window !== "undefined") window.localStorage.setItem(VIEW_KEY, next);
+      return next;
+    });
+  }, []);
   const [, setErr] = useState<string | null>(null);
   const [ago, setAgo] = useState<string>("…");
 
@@ -177,7 +217,15 @@ export default function AnemonPage() {
   const last = status?.epochs && status.epochs.length > 0 ? status.epochs[status.epochs.length - 1] : null;
   const bestEp = status?.best?.ep;
   const stale = lastOk != null && (Date.now() - lastOk) / 1000 > 30;
-  const recent = (status?.epochs ?? []).slice(-RECENT_EPOCHS).reverse();
+  const allEpochs = status?.epochs ?? [];
+  const detailed = viewMode === "detailed";
+  const tableRows = detailed ? [...allEpochs].reverse() : allEpochs.slice(-RECENT_EPOCHS).reverse();
+  const sortedAsc = allEpochs;  // already chronological from server
+  const teValues = sortedAsc.map((e) => e.te_p1 ?? 0);
+  const trValues = sortedAsc.map((e) => e.tr_acc ?? 0);
+  const bestSparkIdx = bestEp != null ? sortedAsc.findIndex((e) => e.ep === bestEp) : -1;
+  const lastGap = last && last.tr_acc != null && last.te_p1 != null ? last.tr_acc - last.te_p1 : null;
+  // Time-per-epoch heuristic: if epochs are evenly spaced and we know ts, approximate; otherwise null.
 
   return (
     <main style={{
@@ -190,15 +238,35 @@ export default function AnemonPage() {
       boxSizing: "border-box",
       display: "flex",
       flexDirection: "column",
-      overflow: "hidden",
+      overflow: detailed ? "auto" : "hidden",
       overscrollBehavior: "none",
-      touchAction: "none",
+      touchAction: detailed ? "auto" : "none",
     }}>
-      <header style={{ padding: "14px 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexShrink: 0 }}>
+      <header style={{ padding: "14px 16px 6px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexShrink: 0 }}>
         <h1 style={{ font: "600 16px/1 inherit", margin: 0, letterSpacing: "0.5px" }}>
           ANEMON · <span style={{ color: "#6bf" }}>{status?.run ?? "—"}</span>
         </h1>
-        <span style={{ fontSize: 11, color: stale ? "#fb6" : "#888" }}>{ago}</span>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button
+            onClick={toggleView}
+            style={{
+              background: detailed ? "#1e3a5f" : "#0f141b",
+              color: detailed ? "#bfe1ff" : "#9ca3af",
+              border: "1px solid " + (detailed ? "#2d5a8a" : "#1f2937"),
+              borderRadius: 5,
+              padding: "4px 10px",
+              fontSize: 10,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              letterSpacing: "0.6px",
+              textTransform: "uppercase",
+            }}
+            aria-label={detailed ? "switch to compact view" : "switch to detailed view"}
+          >
+            {detailed ? "compact" : "details"}
+          </button>
+          <span style={{ fontSize: 11, color: stale ? "#fb6" : "#888" }}>{ago}</span>
+        </div>
       </header>
 
       <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
@@ -235,12 +303,34 @@ export default function AnemonPage() {
         </div>
       </section>
 
-      <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      {detailed && allEpochs.length > 0 && (
+        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 3 }}>test acc trajectory</div>
+              <Sparkline values={teValues} color="#6bf" bestIdx={bestSparkIdx >= 0 ? bestSparkIdx : undefined} />
+            </div>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 3 }}>train acc trajectory</div>
+              <Sparkline values={trValues} color="#fb6" />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
+            <KV k="epochs" v={String(allEpochs.length)} />
+            <KV k="last gap" v={lastGap != null ? `${lastGap.toFixed(2)}` : "—"} color={lastGap != null && lastGap > 8 ? "#fb6" : "#e8e8e8"} />
+            <KV k="best - last" v={status?.best && last?.te_p1 != null ? `${(status.best.p1 - last.te_p1).toFixed(2)}` : "—"} />
+            <KV k="log" v={status?.log?.split("/").slice(-2)[0] ?? "—"} />
+          </div>
+        </section>
+      )}
+
+      <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flex: detailed ? "0 0 auto" : 1, minHeight: 0, overflow: detailed ? "visible" : "hidden", display: "flex", flexDirection: "column" }}>
         {(() => {
-          const hasAux = recent.some(e => e.aux_loss != null);
-          const headers = hasAux
+          const hasAux = tableRows.some(e => e.aux_loss != null);
+          const baseHeaders = hasAux
             ? ["ep", "tr%", "loss", "aux", "te p1", "te p5"]
             : ["ep", "tr%", "loss", "te p1", "te p5"];
+          const headers = detailed ? [...baseHeaders, "gap"] : baseHeaders;
           const fmtAux = (v: number | null | undefined) =>
             v == null || Number.isNaN(v) ? "—" : Number(v).toExponential(1);
           return (
@@ -262,22 +352,28 @@ export default function AnemonPage() {
                 </tr>
               </thead>
               <tbody>
-                {recent.map((e) => {
+                {tableRows.map((e) => {
                   const isBest = e.ep === bestEp;
                   const color = isBest ? "#6f9" : "#e8e8e8";
                   const weight = isBest ? 700 : 400;
-                  const cells = hasAux
+                  const gap = e.tr_acc != null && e.te_p1 != null ? e.tr_acc - e.te_p1 : null;
+                  const baseCells = hasAux
                     ? [String(e.ep), fmt(e.tr_acc, 1), fmt(e.tr_loss, 3), fmtAux(e.aux_loss), fmt(e.te_p1, 2), fmt(e.te_p5, 2)]
                     : [String(e.ep), fmt(e.tr_acc, 1), fmt(e.tr_loss, 3), fmt(e.te_p1, 2), fmt(e.te_p5, 2)];
+                  const cells = detailed ? [...baseCells, gap != null ? gap.toFixed(2) : "—"] : baseCells;
                   return (
                     <tr key={e.ep}>
-                      {cells.map((v, i) => (
-                        <td key={i} style={{
-                          padding: "4px 6px",
-                          textAlign: i === 0 ? "left" : "right",
-                          color, fontWeight: weight,
-                        }}>{v}</td>
-                      ))}
+                      {cells.map((v, i) => {
+                        const isGap = detailed && i === cells.length - 1 && gap != null;
+                        const gapColor = isGap && gap! > 10 ? "#fb6" : isGap && gap! > 5 ? "#fc9" : color;
+                        return (
+                          <td key={i} style={{
+                            padding: "4px 6px",
+                            textAlign: i === 0 ? "left" : "right",
+                            color: gapColor, fontWeight: weight,
+                          }}>{v}</td>
+                        );
+                      })}
                     </tr>
                   );
                 })}
