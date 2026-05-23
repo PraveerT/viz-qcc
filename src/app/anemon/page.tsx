@@ -72,7 +72,7 @@ function KV({ k, v, color }: { k: string; v: string; color?: string }) {
 
 function Sparkline({ values, color = "#6bf", bestIdx }: { values: number[]; color?: string; bestIdx?: number }) {
   if (!values.length) return null;
-  const W = 200, H = 36, pad = 2;
+  const W = 200, H = 44, pad = 3;
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = Math.max(max - min, 1e-6);
@@ -83,15 +83,30 @@ function Sparkline({ values, color = "#6bf", bestIdx }: { values: number[]; colo
     return [x, y] as [number, number];
   });
   const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+  const lastV = values[values.length - 1];
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: "block" }}>
-      <path d={d} stroke={color} strokeWidth={1.4} fill="none" />
-      {bestIdx != null && pts[bestIdx] && (
-        <circle cx={pts[bestIdx][0]} cy={pts[bestIdx][1]} r={2.5} fill="#6f9" />
-      )}
-      <text x={W - pad} y={10} fontSize="9" fill="#888" textAnchor="end">{max.toFixed(2)}</text>
-      <text x={W - pad} y={H - 2} fontSize="9" fill="#888" textAnchor="end">{min.toFixed(2)}</text>
-    </svg>
+    <div style={{ display: "flex", alignItems: "stretch", gap: 6 }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        width="100%"
+        height={H}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ display: "block", flex: 1, minWidth: 0 }}
+      >
+        <path d={d} stroke={color} strokeWidth={1.4} fill="none" vectorEffect="non-scaling-stroke" />
+        {bestIdx != null && pts[bestIdx] && (
+          <circle cx={pts[bestIdx][0]} cy={pts[bestIdx][1]} r={2.5} fill="#6f9" />
+        )}
+      </svg>
+      <div style={{
+        display: "flex", flexDirection: "column", justifyContent: "space-between",
+        fontSize: 10, color: "#888", lineHeight: 1.1, minWidth: 38, textAlign: "right",
+      }}>
+        <span>{max.toFixed(2)}</span>
+        <span style={{ color: "#bfe1ff", fontWeight: 600 }}>{lastV.toFixed(2)}</span>
+        <span>{min.toFixed(2)}</span>
+      </div>
+    </div>
   );
 }
 
