@@ -38,6 +38,12 @@ type Status = {
     quat_inject_norm?: number;
     quat_inject_max?: number;
   } | null;
+  cluster?: {
+    epoch: number;
+    cycle_proj_norm: number;
+    cycle_proj_max: number;
+    cluster_head_norm?: number;
+  } | null;
 };
 
 const fmt = (n: number | null | undefined, d = 1) =>
@@ -66,46 +72,6 @@ function KV({ k, v, color }: { k: string; v: string; color?: string }) {
     <div style={{ display: "flex", flexDirection: "column", minWidth: 70 }}>
       <span style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px" }}>{k}</span>
       <span style={{ fontSize: 14, fontWeight: 600, color: color || "#e8e8e8" }}>{v}</span>
-    </div>
-  );
-}
-
-function Sparkline({ values, color = "#6bf", bestIdx }: { values: number[]; color?: string; bestIdx?: number }) {
-  if (!values.length) return null;
-  const W = 200, H = 44, pad = 3;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = Math.max(max - min, 1e-6);
-  const dx = values.length > 1 ? (W - 2 * pad) / (values.length - 1) : 0;
-  const pts = values.map((v, i) => {
-    const x = pad + i * dx;
-    const y = H - pad - ((v - min) / range) * (H - 2 * pad);
-    return [x, y] as [number, number];
-  });
-  const d = pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
-  const lastV = values[values.length - 1];
-  return (
-    <div style={{ display: "flex", alignItems: "stretch", gap: 6 }}>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        width="100%"
-        height={H}
-        preserveAspectRatio="xMidYMid meet"
-        style={{ display: "block", flex: 1, minWidth: 0 }}
-      >
-        <path d={d} stroke={color} strokeWidth={1.4} fill="none" vectorEffect="non-scaling-stroke" />
-        {bestIdx != null && pts[bestIdx] && (
-          <circle cx={pts[bestIdx][0]} cy={pts[bestIdx][1]} r={2.5} fill="#6f9" />
-        )}
-      </svg>
-      <div style={{
-        display: "flex", flexDirection: "column", justifyContent: "space-between",
-        fontSize: 10, color: "#888", lineHeight: 1.1, minWidth: 38, textAlign: "right",
-      }}>
-        <span>{max.toFixed(2)}</span>
-        <span style={{ color: "#bfe1ff", fontWeight: 600 }}>{lastV.toFixed(2)}</span>
-        <span>{min.toFixed(2)}</span>
-      </div>
     </div>
   );
 }
@@ -235,12 +201,8 @@ export default function AnemonPage() {
   const allEpochs = status?.epochs ?? [];
   const detailed = viewMode === "detailed";
   const tableRows = detailed ? [...allEpochs].reverse() : allEpochs.slice(-RECENT_EPOCHS).reverse();
-  const sortedAsc = allEpochs;  // already chronological from server
-  const teValues = sortedAsc.map((e) => e.te_p1 ?? 0);
-  const trValues = sortedAsc.map((e) => e.tr_acc ?? 0);
-  const bestSparkIdx = bestEp != null ? sortedAsc.findIndex((e) => e.ep === bestEp) : -1;
+  const teValues = allEpochs.map((e) => e.te_p1 ?? 0);
   const lastGap = last && last.tr_acc != null && last.te_p1 != null ? last.tr_acc - last.te_p1 : null;
-  // Time-per-epoch heuristic: if epochs are evenly spaced and we know ts, approximate; otherwise null.
 
   return (
     <main style={{
@@ -318,26 +280,85 @@ export default function AnemonPage() {
         </div>
       </section>
 
-      {detailed && allEpochs.length > 0 && (
-        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
-          <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 3 }}>test acc trajectory</div>
-              <Sparkline values={teValues} color="#6bf" bestIdx={bestSparkIdx >= 0 ? bestSparkIdx : undefined} />
+      {detailed && allEpochs.length > 0 && (() => {
+        const auxVals = allEpochs.map(e => e.aux_loss).filter((v): v is number => v != null);
+        const lossVals = allEpochs.map(e => e.tr_loss).filter((v): v is number => v != null);
+        const lastAux = last?.aux_loss;
+        const lastTrLoss = last?.tr_loss;
+        // Mechanism contribution = aux_loss / total_loss at last epoch.
+        // tr_loss in main.py is the MEAN training loss = mean(CE + aux). So
+        // aux_share = aux / tr_loss approximates the share aux takes of the
+        // optimizer's gradient signal.
+        const auxShare = (lastAux != null && lastTrLoss != null && lastTrLoss > 0)
+          ? lastAux / lastTrLoss : null;
+        const teMin = Math.min(...teValues);
+        const teMax = Math.max(...teValues);
+        const gaps = allEpochs
+          .filter(e => e.tr_acc != null && e.te_p1 != null)
+          .map(e => (e.tr_acc! - e.te_p1!));
+        const maxGap = gaps.length ? Math.max(...gaps) : null;
+        const minGap = gaps.length ? Math.min(...gaps) : null;
+        const tot = (auxVals.length ? auxVals.reduce((a,b)=>a+b,0)/auxVals.length : null);
+        const cyc = status?.cluster;
+        const qcc = status?.qcc;
+        const eng = status?.engram;
+        return (
+          <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+            <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
+              detailed metrics
             </div>
-            <div style={{ flex: 1, minWidth: 220 }}>
-              <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 3 }}>train acc trajectory</div>
-              <Sparkline values={trValues} color="#fb6" />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
+              <KV k="epochs" v={String(allEpochs.length)} />
+              <KV k="best p1" v={status?.best ? `${fmt(status.best.p1, 2)}` : "—"} color="#6f9" />
+              <KV k="last p1" v={last?.te_p1 != null ? fmt(last.te_p1, 2) : "—"} />
+              <KV k="te range" v={teValues.length ? `${teMin.toFixed(1)}–${teMax.toFixed(1)}` : "—"} />
+              <KV k="last gap" v={lastGap != null ? lastGap.toFixed(2) : "—"} color={lastGap != null && lastGap > 8 ? "#fb6" : "#e8e8e8"} />
+              <KV k="max gap" v={maxGap != null ? maxGap.toFixed(2) : "—"} color={maxGap != null && maxGap > 15 ? "#fb6" : "#e8e8e8"} />
+              <KV k="min gap" v={minGap != null ? minGap.toFixed(2) : "—"} />
+              <KV k="best − last" v={status?.best && last?.te_p1 != null ? (status.best.p1 - last.te_p1).toFixed(2) : "—"} />
+              <KV k="aux/total" v={auxShare != null ? `${(auxShare*100).toFixed(1)}%` : "—"} color={auxShare != null && auxShare > 0.5 ? "#fb6" : auxShare != null && auxShare > 0.1 ? "#bfe1ff" : "#e8e8e8"} />
+              <KV k="mean aux" v={tot != null ? tot.toExponential(2) : "—"} />
+              <KV k="last loss" v={lastTrLoss != null ? lastTrLoss.toFixed(3) : "—"} />
+              <KV k="last aux" v={lastAux != null ? lastAux.toExponential(2) : "—"} />
             </div>
-          </div>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
-            <KV k="epochs" v={String(allEpochs.length)} />
-            <KV k="last gap" v={lastGap != null ? `${lastGap.toFixed(2)}` : "—"} color={lastGap != null && lastGap > 8 ? "#fb6" : "#e8e8e8"} />
-            <KV k="best - last" v={status?.best && last?.te_p1 != null ? `${(status.best.p1 - last.te_p1).toFixed(2)}` : "—"} />
-            <KV k="log" v={status?.log?.split("/").slice(-2)[0] ?? "—"} />
-          </div>
-        </section>
-      )}
+            {(cyc || qcc || eng) && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
+                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
+                  mechanism weights (zero-init residuals; growth = activity)
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
+                  {cyc && (
+                    <>
+                      <KV k="cycle_proj" v={cyc.cycle_proj_norm.toFixed(4)} color={cyc.cycle_proj_norm > 0.01 ? "#6bf" : "#f88"} />
+                      <KV k="cycle_max" v={cyc.cycle_proj_max.toFixed(4)} />
+                      {cyc.cluster_head_norm != null && (
+                        <KV k="cluster_head" v={cyc.cluster_head_norm.toFixed(3)} />
+                      )}
+                    </>
+                  )}
+                  {qcc && (
+                    <>
+                      <KV k="qcc_scale" v={qcc.qcc_scale.toFixed(4)} color={Math.abs(qcc.qcc_scale) > 0.005 ? "#6bf" : "#f88"} />
+                      {qcc.quat_inject_scale !== undefined && (
+                        <KV k="quat_inject" v={qcc.quat_inject_scale.toFixed(4)} color={Math.abs(qcc.quat_inject_scale) > 0.005 ? "#6bf" : "#f88"} />
+                      )}
+                    </>
+                  )}
+                  {eng && (
+                    <>
+                      <KV k="engram_out" v={eng.out_norm.toFixed(4)} color={eng.out_norm > 0.01 ? "#6bf" : "#f88"} />
+                      <KV k="engram_max" v={eng.out_max.toFixed(4)} />
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 8 }}>
+              aux/total = aux_loss share of training loss · gap = train% − test% · log {status?.log?.split("/").slice(-2)[0] ?? "—"}
+            </div>
+          </section>
+        );
+      })()}
 
       <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flex: detailed ? "0 0 auto" : 1, minHeight: 0, overflow: detailed ? "visible" : "hidden", display: "flex", flexDirection: "column" }}>
         {(() => {

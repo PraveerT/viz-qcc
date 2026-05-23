@@ -50,10 +50,12 @@ export default function Page() {
         background: "#0b0f14",
         color: "#e5e7eb",
         minHeight: "100vh",
-        padding: "20px 18px 32px",
+        padding: "16px clamp(8px, 3vw, 18px) 32px",
         fontFamily:
           'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
         boxSizing: "border-box",
+        WebkitTextSizeAdjust: "100%",
+        overflowX: "hidden",
       }}
     >
       <div style={{ maxWidth: 920, margin: "0 auto" }}>
@@ -105,10 +107,12 @@ export default function Page() {
             background: "#0f141b",
             border: "1px solid #1f2937",
             borderRadius: 8,
-            padding: 18,
+            padding: "14px clamp(10px, 3vw, 18px)",
             fontSize: 14,
             lineHeight: 1.6,
             minHeight: 200,
+            wordBreak: "break-word",
+            overflowWrap: "anywhere",
           }}
         >
           {!notes?.body?.length ? (
@@ -164,14 +168,17 @@ export default function Page() {
                   />
                 ),
                 table: (props) => (
-                  <table
-                    {...props}
-                    style={{
-                      borderCollapse: "collapse",
-                      margin: "10px 0",
-                      fontSize: 13,
-                    }}
-                  />
+                  <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", margin: "10px 0" }}>
+                    <table
+                      {...props}
+                      style={{
+                        borderCollapse: "collapse",
+                        fontSize: 13,
+                        whiteSpace: "nowrap",
+                        margin: 0,
+                      }}
+                    />
+                  </div>
                 ),
                 th: (props) => (
                   <th
