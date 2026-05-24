@@ -51,7 +51,11 @@ type Status = {
     aux_m: number;
     main_m: number;
   } | null;
-  misclass?: { cls: number; wrong: number; total: number; pct: number }[] | null;
+  misclass?: {
+    cls: number;
+    cur_w: number; cur_t: number; cur_pct: number;
+    ref_w?: number; ref_t?: number; ref_pct?: number; delta_pct?: number;
+  }[] | null;
   cnxxl_delta?: { ep: number; te: number; base_te: number; delta: number }[] | null;
   refs?: {
     current_best: number;
@@ -452,15 +456,35 @@ export default function AnemonPage() {
             )}
             {status?.misclass && status.misclass.length > 0 && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
-                <SubHead>worst classes</SubHead>
+                <SubHead>worst classes (current · cnxxlquat 91.08)</SubHead>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {status.misclass.map(m => (
-                    <Chip key={m.cls}
-                      label={`cls ${m.cls}`}
-                      value={`${m.wrong}/${m.total} ${m.pct}%`}
-                      color={m.pct > 50 ? "#f88" : m.pct > 25 ? "#fb6" : "#fc9"}
-                    />
-                  ))}
+                  {status.misclass.map(m => {
+                    const curC = m.cur_pct > 50 ? "#f88" : m.cur_pct > 25 ? "#fb6" : "#fc9";
+                    const hasRef = m.ref_pct != null && m.delta_pct != null;
+                    const dC = hasRef
+                      ? (m.delta_pct! > 5 ? "#f88" : m.delta_pct! > 0 ? "#fb6" : m.delta_pct! < -5 ? "#6f9" : "#bfe1ff")
+                      : "#888";
+                    return (
+                      <div key={m.cls} style={{
+                        background: "#0f141b", border: "1px solid #1f2937", borderRadius: 3,
+                        padding: "2px 5px", display: "flex", flexDirection: "column", minWidth: 64,
+                      }}>
+                        <span style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.3px" }}>cls {m.cls}</span>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                          <span style={{ fontSize: 11, color: curC, fontWeight: 600 }}>{m.cur_pct}%</span>
+                          {hasRef && (
+                            <>
+                              <span style={{ fontSize: 9, color: "#555" }}>·</span>
+                              <span style={{ fontSize: 9, color: "#888" }}>{m.ref_pct}%</span>
+                              <span style={{ fontSize: 9, color: dC, fontWeight: 600 }}>
+                                {m.delta_pct! > 0 ? "+" : ""}{m.delta_pct!.toFixed(1)}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
