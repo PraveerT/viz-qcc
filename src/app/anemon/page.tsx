@@ -89,6 +89,39 @@ function KV({ k, v, color }: { k: string; v: string; color?: string }) {
   );
 }
 
+function MKV({ k, v, color }: { k: string; v: string; color?: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minWidth: 48 }}>
+      <span style={{ fontSize: 8.5, color: "#888", textTransform: "uppercase", letterSpacing: "0.4px" }}>{k}</span>
+      <span style={{ fontSize: 11.5, fontWeight: 600, color: color || "#e8e8e8" }}>{v}</span>
+    </div>
+  );
+}
+
+function Chip({ label, value, color, border }: { label: string; value: string; color?: string; border?: string }) {
+  return (
+    <div style={{
+      background: "#0f141b",
+      border: `1px solid ${border ?? "#1f2937"}`,
+      borderRadius: 3,
+      padding: "2px 5px",
+      display: "flex", flexDirection: "column",
+      minWidth: 48,
+    }}>
+      <span style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.3px" }}>{label}</span>
+      <span style={{ fontSize: 11, color: color || "#e8e8e8", fontWeight: 600 }}>{value}</span>
+    </div>
+  );
+}
+
+function SubHead({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 8.5, color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>
+      {children}
+    </div>
+  );
+}
+
 function CompactTable({ rows }: { rows: LBRow[] }) {
   if (!rows || rows.length === 0) return null;
   const cols = Object.keys(rows[0]);
@@ -316,135 +349,101 @@ export default function AnemonPage() {
         const qcc = status?.qcc;
         const eng = status?.engram;
         return (
-          <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
-            <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
-              detailed metrics
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
-              <KV k="epochs" v={String(allEpochs.length)} />
-              <KV k="best p1" v={status?.best ? `${fmt(status.best.p1, 2)}` : "—"} color="#6f9" />
-              <KV k="last p1" v={last?.te_p1 != null ? fmt(last.te_p1, 2) : "—"} />
-              <KV k="te range" v={teValues.length ? `${teMin.toFixed(1)}–${teMax.toFixed(1)}` : "—"} />
-              <KV k="last gap" v={lastGap != null ? lastGap.toFixed(2) : "—"} color={lastGap != null && lastGap > 8 ? "#fb6" : "#e8e8e8"} />
-              <KV k="max gap" v={maxGap != null ? maxGap.toFixed(2) : "—"} color={maxGap != null && maxGap > 15 ? "#fb6" : "#e8e8e8"} />
-              <KV k="min gap" v={minGap != null ? minGap.toFixed(2) : "—"} />
-              <KV k="best − last" v={status?.best && last?.te_p1 != null ? (status.best.p1 - last.te_p1).toFixed(2) : "—"} />
-              <KV k="aux/total" v={auxShare != null ? `${(auxShare*100).toFixed(1)}%` : "—"} color={auxShare != null && auxShare > 0.5 ? "#fb6" : auxShare != null && auxShare > 0.1 ? "#bfe1ff" : "#e8e8e8"} />
-              <KV k="mean aux" v={tot != null ? tot.toExponential(2) : "—"} />
-              <KV k="last loss" v={lastTrLoss != null ? lastTrLoss.toFixed(3) : "—"} />
-              <KV k="last aux" v={lastAux != null ? lastAux.toExponential(2) : "—"} />
+          <section style={{ padding: "6px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
+            <SubHead>detailed metrics</SubHead>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(64px, 1fr))", gap: 6 }}>
+              <MKV k="te range" v={teValues.length ? `${teMin.toFixed(1)}–${teMax.toFixed(1)}` : "—"} />
+              <MKV k="last gap" v={lastGap != null ? lastGap.toFixed(2) : "—"} color={lastGap != null && lastGap > 8 ? "#fb6" : "#e8e8e8"} />
+              <MKV k="max gap" v={maxGap != null ? maxGap.toFixed(2) : "—"} color={maxGap != null && maxGap > 15 ? "#fb6" : "#e8e8e8"} />
+              <MKV k="min gap" v={minGap != null ? minGap.toFixed(2) : "—"} />
+              <MKV k="best−last" v={status?.best && last?.te_p1 != null ? (status.best.p1 - last.te_p1).toFixed(2) : "—"} />
+              <MKV k="aux/total" v={auxShare != null ? `${(auxShare*100).toFixed(1)}%` : "—"} color={auxShare != null && auxShare > 0.5 ? "#fb6" : auxShare != null && auxShare > 0.1 ? "#bfe1ff" : "#e8e8e8"} />
+              <MKV k="mean aux" v={tot != null ? tot.toExponential(1) : "—"} />
+              <MKV k="last loss" v={lastTrLoss != null ? lastTrLoss.toFixed(2) : "—"} />
+              <MKV k="last aux" v={lastAux != null ? lastAux.toExponential(1) : "—"} />
             </div>
             {(cyc || qcc || eng) && (
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
-                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
-                  mechanism weights (zero-init residuals; growth = activity)
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
+                <SubHead>mechanism weights (zero-init)</SubHead>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(64px, 1fr))", gap: 6 }}>
                   {cyc && (
                     <>
-                      <KV k="cycle_proj" v={cyc.cycle_proj_norm.toFixed(4)} color={cyc.cycle_proj_norm > 0.01 ? "#6bf" : "#f88"} />
-                      <KV k="cycle_max" v={cyc.cycle_proj_max.toFixed(4)} />
+                      <MKV k="cycle" v={cyc.cycle_proj_norm.toFixed(3)} color={cyc.cycle_proj_norm > 0.01 ? "#6bf" : "#f88"} />
+                      <MKV k="cyc max" v={cyc.cycle_proj_max.toFixed(3)} />
                       {cyc.cluster_head_norm != null && (
-                        <KV k="cluster_head" v={cyc.cluster_head_norm.toFixed(3)} />
+                        <MKV k="cluster_h" v={cyc.cluster_head_norm.toFixed(2)} />
                       )}
                     </>
                   )}
                   {qcc && (
                     <>
-                      <KV k="qcc_scale" v={qcc.qcc_scale.toFixed(4)} color={Math.abs(qcc.qcc_scale) > 0.005 ? "#6bf" : "#f88"} />
+                      <MKV k="qcc" v={qcc.qcc_scale.toFixed(3)} color={Math.abs(qcc.qcc_scale) > 0.005 ? "#6bf" : "#f88"} />
                       {qcc.quat_inject_scale !== undefined && (
-                        <KV k="quat_inject" v={qcc.quat_inject_scale.toFixed(4)} color={Math.abs(qcc.quat_inject_scale) > 0.005 ? "#6bf" : "#f88"} />
+                        <MKV k="qinj" v={qcc.quat_inject_scale.toFixed(3)} color={Math.abs(qcc.quat_inject_scale) > 0.005 ? "#6bf" : "#f88"} />
                       )}
                     </>
                   )}
                   {eng && (
                     <>
-                      <KV k="engram_out" v={eng.out_norm.toFixed(4)} color={eng.out_norm > 0.01 ? "#6bf" : "#f88"} />
-                      <KV k="engram_max" v={eng.out_max.toFixed(4)} />
+                      <MKV k="engram" v={eng.out_norm.toFixed(3)} color={eng.out_norm > 0.01 ? "#6bf" : "#f88"} />
+                      <MKV k="eng max" v={eng.out_max.toFixed(3)} />
                     </>
                   )}
                 </div>
               </div>
             )}
             {status?.refs && (
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
-                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
-                  best so far vs reference runs
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 11 }}>
-                  <div style={{ background: "#0f141b", border: "1px solid #2d5a8a", borderRadius: 4, padding: "4px 8px", display: "flex", flexDirection: "column", minWidth: 80 }}>
-                    <span style={{ fontSize: 9, color: "#888" }}>current best</span>
-                    <span style={{ color: "#6f9", fontWeight: 700 }}>{status.refs.current_best.toFixed(2)}</span>
-                  </div>
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
+                <SubHead>best vs refs</SubHead>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  <Chip label="current" value={status.refs.current_best.toFixed(2)} color="#6f9" border="#2d5a8a" />
                   {status.refs.refs.map(r => {
                     const dc = r.delta > 0.5 ? "#6f9" : r.delta > 0 ? "#bfe1ff" : r.delta < -1.5 ? "#f88" : "#fc9";
                     return (
-                      <div key={r.name} style={{
-                        background: "#0f141b", border: "1px solid #1f2937", borderRadius: 4,
-                        padding: "4px 8px", display: "flex", flexDirection: "column", minWidth: 80,
-                      }}>
-                        <span style={{ fontSize: 9, color: "#888" }}>vs {r.name} ({r.value})</span>
-                        <span style={{ color: dc, fontWeight: 600 }}>
-                          {r.delta > 0 ? "+" : ""}{r.delta.toFixed(2)}
-                        </span>
-                      </div>
+                      <Chip key={r.name} label={`vs ${r.name} ${r.value}`} value={`${r.delta > 0 ? "+" : ""}${r.delta.toFixed(2)}`} color={dc} />
                     );
                   })}
                 </div>
               </div>
             )}
             {status?.cnxxl_delta && status.cnxxl_delta.length > 0 && (
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
-                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
-                  delta vs cnxxlquat 91.08 baseline (per ep)
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 11 }}>
-                  {status.cnxxl_delta.map(d => {
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
+                <SubHead>delta vs cnxxlquat 91.08 (per ep)</SubHead>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {status.cnxxl_delta.slice(-10).map(d => {
                     const dc = d.delta > 1 ? "#6f9" : d.delta > 0 ? "#bfe1ff" : d.delta < -2 ? "#f88" : "#fc9";
                     return (
-                      <div key={d.ep} style={{
-                        background: "#0f141b", border: "1px solid #1f2937", borderRadius: 4,
-                        padding: "3px 6px", display: "flex", flexDirection: "column", minWidth: 56,
-                      }}>
-                        <span style={{ fontSize: 9, color: "#888" }}>ep {d.ep}</span>
-                        <span style={{ color: dc, fontWeight: 600 }}>
-                          {d.delta > 0 ? "+" : ""}{d.delta.toFixed(2)}
-                        </span>
-                      </div>
+                      <Chip key={d.ep} label={`ep ${d.ep}`} value={`${d.delta > 0 ? "+" : ""}${d.delta.toFixed(2)}`} color={dc} />
                     );
                   })}
                 </div>
               </div>
             )}
             {status?.param_counts && (
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
-                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
-                  param counts (M)
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
-                  <KV k="total" v={`${status.param_counts.total_m}M`} />
-                  <KV k="main" v={`${status.param_counts.main_m}M`} />
-                  <KV k="aux" v={`${status.param_counts.aux_m}M`} color="#bfe1ff" />
-                  <KV k="aux %" v={`${(100 * status.param_counts.aux_m / Math.max(status.param_counts.total_m, 1e-9)).toFixed(1)}%`} />
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
+                <SubHead>param counts (M)</SubHead>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(56px, 1fr))", gap: 6 }}>
+                  <MKV k="total" v={`${status.param_counts.total_m}M`} />
+                  <MKV k="main" v={`${status.param_counts.main_m}M`} />
+                  <MKV k="aux" v={`${status.param_counts.aux_m}M`} color="#bfe1ff" />
+                  <MKV k="aux %" v={`${(100 * status.param_counts.aux_m / Math.max(status.param_counts.total_m, 1e-9)).toFixed(1)}%`} />
                 </div>
               </div>
             )}
             {cyc?.cluster_mass && cyc.cluster_mass.length > 0 && (
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
-                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
-                  per-cluster mass (ema; uniform = 1/K = {fmt(1.0 / cyc.cluster_mass.length, 3)})
-                </div>
-                <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 60 }}>
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
+                <SubHead>per-cluster mass (1/K = {fmt(1.0 / cyc.cluster_mass.length, 3)})</SubHead>
+                <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 36 }}>
                   {cyc.cluster_mass.map((m, i) => {
                     const target = 1.0 / cyc.cluster_mass!.length;
                     const ratio = m / target;
                     const color = ratio > 2 ? "#fb6" : ratio > 1.4 ? "#fc9" : ratio < 0.4 ? "#f88" : "#6bf";
-                    const h = Math.max(2, Math.min(60, m * 200));
+                    const h = Math.max(2, Math.min(36, m * 120));
                     return (
-                      <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                        <div style={{ fontSize: 9, color: "#888" }}>{(m * 100).toFixed(1)}</div>
+                      <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                        <div style={{ fontSize: 8, color: "#888" }}>{(m * 100).toFixed(0)}</div>
                         <div style={{ width: "100%", background: color, height: `${h}px`, borderRadius: 2 }} />
-                        <div style={{ fontSize: 9, color: "#666" }}>k{i}</div>
+                        <div style={{ fontSize: 8, color: "#666" }}>k{i}</div>
                       </div>
                     );
                   })}
@@ -452,28 +451,19 @@ export default function AnemonPage() {
               </div>
             )}
             {status?.misclass && status.misclass.length > 0 && (
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
-                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
-                  worst classes (test confusion)
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 11 }}>
+              <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
+                <SubHead>worst classes</SubHead>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                   {status.misclass.map(m => (
-                    <div key={m.cls} style={{
-                      background: "#0f141b", border: "1px solid #1f2937", borderRadius: 4,
-                      padding: "3px 7px", display: "flex", flexDirection: "column", minWidth: 64,
-                    }}>
-                      <span style={{ fontSize: 9, color: "#888" }}>cls {m.cls}</span>
-                      <span style={{ color: m.pct > 50 ? "#f88" : m.pct > 25 ? "#fb6" : "#fc9", fontWeight: 600 }}>
-                        {m.wrong}/{m.total} ({m.pct}%)
-                      </span>
-                    </div>
+                    <Chip key={m.cls}
+                      label={`cls ${m.cls}`}
+                      value={`${m.wrong}/${m.total} ${m.pct}%`}
+                      color={m.pct > 50 ? "#f88" : m.pct > 25 ? "#fb6" : "#fc9"}
+                    />
                   ))}
                 </div>
               </div>
             )}
-            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 8 }}>
-              aux/total = aux_loss share of training loss · gap = train% − test% · log {status?.log?.split("/").slice(-2)[0] ?? "—"}
-            </div>
           </section>
         );
       })()}
