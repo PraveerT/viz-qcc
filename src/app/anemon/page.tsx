@@ -43,7 +43,16 @@ type Status = {
     cycle_proj_norm: number;
     cycle_proj_max: number;
     cluster_head_norm?: number;
+    cluster_mass?: number[];
   } | null;
+  param_counts?: {
+    epoch: number;
+    total_m: number;
+    aux_m: number;
+    main_m: number;
+  } | null;
+  misclass?: { cls: number; wrong: number; total: number; pct: number }[] | null;
+  cnxxl_delta?: { ep: number; te: number; base_te: number; delta: number }[] | null;
 };
 
 const fmt = (n: number | null | undefined, d = 1) =>
@@ -350,6 +359,84 @@ export default function AnemonPage() {
                       <KV k="engram_max" v={eng.out_max.toFixed(4)} />
                     </>
                   )}
+                </div>
+              </div>
+            )}
+            {status?.cnxxl_delta && status.cnxxl_delta.length > 0 && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
+                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
+                  delta vs cnxxlquat 91.08 baseline (per ep)
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 11 }}>
+                  {status.cnxxl_delta.map(d => {
+                    const dc = d.delta > 1 ? "#6f9" : d.delta > 0 ? "#bfe1ff" : d.delta < -2 ? "#f88" : "#fc9";
+                    return (
+                      <div key={d.ep} style={{
+                        background: "#0f141b", border: "1px solid #1f2937", borderRadius: 4,
+                        padding: "3px 6px", display: "flex", flexDirection: "column", minWidth: 56,
+                      }}>
+                        <span style={{ fontSize: 9, color: "#888" }}>ep {d.ep}</span>
+                        <span style={{ color: dc, fontWeight: 600 }}>
+                          {d.delta > 0 ? "+" : ""}{d.delta.toFixed(2)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {status?.param_counts && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
+                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
+                  param counts (M)
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10 }}>
+                  <KV k="total" v={`${status.param_counts.total_m}M`} />
+                  <KV k="main" v={`${status.param_counts.main_m}M`} />
+                  <KV k="aux" v={`${status.param_counts.aux_m}M`} color="#bfe1ff" />
+                  <KV k="aux %" v={`${(100 * status.param_counts.aux_m / Math.max(status.param_counts.total_m, 1e-9)).toFixed(1)}%`} />
+                </div>
+              </div>
+            )}
+            {cyc?.cluster_mass && cyc.cluster_mass.length > 0 && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
+                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
+                  per-cluster mass (ema; uniform = 1/K = {fmt(1.0 / cyc.cluster_mass.length, 3)})
+                </div>
+                <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 60 }}>
+                  {cyc.cluster_mass.map((m, i) => {
+                    const target = 1.0 / cyc.cluster_mass!.length;
+                    const ratio = m / target;
+                    const color = ratio > 2 ? "#fb6" : ratio > 1.4 ? "#fc9" : ratio < 0.4 ? "#f88" : "#6bf";
+                    const h = Math.max(2, Math.min(60, m * 200));
+                    return (
+                      <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                        <div style={{ fontSize: 9, color: "#888" }}>{(m * 100).toFixed(1)}</div>
+                        <div style={{ width: "100%", background: color, height: `${h}px`, borderRadius: 2 }} />
+                        <div style={{ fontSize: 9, color: "#666" }}>k{i}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {status?.misclass && status.misclass.length > 0 && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
+                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
+                  worst classes (test confusion)
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 11 }}>
+                  {status.misclass.map(m => (
+                    <div key={m.cls} style={{
+                      background: "#0f141b", border: "1px solid #1f2937", borderRadius: 4,
+                      padding: "3px 7px", display: "flex", flexDirection: "column", minWidth: 64,
+                    }}>
+                      <span style={{ fontSize: 9, color: "#888" }}>cls {m.cls}</span>
+                      <span style={{ color: m.pct > 50 ? "#f88" : m.pct > 25 ? "#fb6" : "#fc9", fontWeight: 600 }}>
+                        {m.wrong}/{m.total} ({m.pct}%)
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
