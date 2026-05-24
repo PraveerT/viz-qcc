@@ -51,17 +51,30 @@ type Status = {
     aux_m: number;
     main_m: number;
   } | null;
-  misclass?: {
-    cls: number;
-    cur_w: number; cur_t: number; cur_pct: number;
-    ref_w?: number; ref_t?: number; ref_pct?: number; delta_pct?: number;
-  }[] | null;
   cnxxl_delta?: { ep: number; te: number; base_te: number; delta: number }[] | null;
   refs?: {
     current_best: number;
     refs: { name: string; value: number; delta: number }[];
   } | null;
+  available_refs?: {
+    name: string;
+    label: string;
+    acc: number;
+    perclass: { cls: number; wrong: number; total: number }[];
+  }[] | null;
+  current_perclass?: { cls: number; wrong: number; total: number }[] | null;
+  fusion?: {
+    epoch?: number | null;
+    ts?: string;
+    solo: { cur: number; cnxxl: number; dsn: number };
+    fusion: { cnxxl_cur: number; cnxxl_dsn: number; cnxxl_dsn_cur: number };
+    oracle: { cnxxl_cur: number; cnxxl_dsn: number; cnxxl_dsn_cur: number };
+  } | null;
 };
+
+const REF_KEY = "anemon_ref_name";
+const SORT_KEY = "anemon_perclass_sort";
+type PerclassSort = "wrong" | "cls" | "delta";
 
 const fmt = (n: number | null | undefined, d = 1) =>
   n == null || Number.isNaN(n) ? "—" : Number(n).toFixed(d);
@@ -176,12 +189,28 @@ export default function AnemonPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [lastOk, setLastOk] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<"compact" | "detailed">("compact");
+  const [selectedRef, setSelectedRef] = useState<string | null>(null);
+  const [perclassSort, setPerclassSort] = useState<PerclassSort>("wrong");
   useEffect(() => {
     if (typeof window !== "undefined") {
       const saved = window.localStorage.getItem(VIEW_KEY);
       if (saved === "detailed" || saved === "compact") setViewMode(saved);
+      const r = window.localStorage.getItem(REF_KEY);
+      if (r) setSelectedRef(r);
+      const s = window.localStorage.getItem(SORT_KEY);
+      if (s === "wrong" || s === "cls" || s === "delta") setPerclassSort(s);
     }
   }, []);
+  useEffect(() => {
+    if (typeof window !== "undefined" && selectedRef) {
+      window.localStorage.setItem(REF_KEY, selectedRef);
+    }
+  }, [selectedRef]);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SORT_KEY, perclassSort);
+    }
+  }, [perclassSort]);
   const toggleView = useCallback(() => {
     setViewMode((m) => {
       const next = m === "compact" ? "detailed" : "compact";
@@ -454,40 +483,112 @@ export default function AnemonPage() {
                 </div>
               </div>
             )}
-            {status?.misclass && status.misclass.length > 0 && (
+            {status?.fusion && (
               <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
-                <SubHead>worst classes (current · cnxxlquat 91.08)</SubHead>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {status.misclass.map(m => {
-                    const curC = m.cur_pct > 50 ? "#f88" : m.cur_pct > 25 ? "#fb6" : "#fc9";
-                    const hasRef = m.ref_pct != null && m.delta_pct != null;
-                    const dC = hasRef
-                      ? (m.delta_pct! > 5 ? "#f88" : m.delta_pct! > 0 ? "#fb6" : m.delta_pct! < -5 ? "#6f9" : "#bfe1ff")
-                      : "#888";
-                    return (
-                      <div key={m.cls} style={{
-                        background: "#0f141b", border: "1px solid #1f2937", borderRadius: 3,
-                        padding: "2px 5px", display: "flex", flexDirection: "column", minWidth: 64,
-                      }}>
-                        <span style={{ fontSize: 8.5, color: "#888", letterSpacing: "0.3px" }}>cls {m.cls}</span>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-                          <span style={{ fontSize: 11, color: curC, fontWeight: 600 }}>{m.cur_pct}%</span>
-                          {hasRef && (
-                            <>
-                              <span style={{ fontSize: 9, color: "#555" }}>·</span>
-                              <span style={{ fontSize: 9, color: "#888" }}>{m.ref_pct}%</span>
-                              <span style={{ fontSize: 9, color: dC, fontWeight: 600 }}>
-                                {m.delta_pct! > 0 ? "+" : ""}{m.delta_pct!.toFixed(1)}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                <SubHead>honest fusion @ best ckpt {status.fusion.epoch != null ? `(ep ${status.fusion.epoch})` : ""}</SubHead>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))", gap: 4 }}>
+                  <MKV k="cur solo" v={`${status.fusion.solo.cur}`} />
+                  <MKV k="cnxxl" v={`${status.fusion.solo.cnxxl}`} />
+                  <MKV k="dsn" v={`${status.fusion.solo.dsn}`} />
+                  <MKV k="cnxxl+cur" v={`${status.fusion.fusion.cnxxl_cur}`} color={status.fusion.fusion.cnxxl_cur > status.fusion.solo.cnxxl ? "#6f9" : "#f88"} />
+                  <MKV k="cnxxl+dsn" v={`${status.fusion.fusion.cnxxl_dsn}`} color="#6f9" />
+                  <MKV k="3-way" v={`${status.fusion.fusion.cnxxl_dsn_cur}`} color={status.fusion.fusion.cnxxl_dsn_cur > status.fusion.fusion.cnxxl_dsn ? "#6f9" : "#fb6"} />
+                  <MKV k="orc 2w" v={`${status.fusion.oracle.cnxxl_cur}`} color="#bfe1ff" />
+                  <MKV k="orc 3w" v={`${status.fusion.oracle.cnxxl_dsn_cur}`} color="#bfe1ff" />
                 </div>
               </div>
             )}
+            {status?.current_perclass && status.current_perclass.length > 0 && (() => {
+              const refs = status.available_refs ?? [];
+              const cur = status.current_perclass!;
+              const activeRefName = selectedRef && refs.some(r => r.name === selectedRef)
+                ? selectedRef
+                : (refs[0]?.name ?? null);
+              const refObj = refs.find(r => r.name === activeRefName) ?? null;
+              const refMap = new Map((refObj?.perclass ?? []).map(p => [p.cls, p]));
+              type Row = {
+                cls: number; cur_w: number; cur_t: number; cur_pct: number;
+                ref_w: number | null; ref_t: number | null; ref_pct: number | null; delta_pct: number | null;
+              };
+              const rows: Row[] = cur.map(c => {
+                const r = refMap.get(c.cls);
+                const cur_pct = c.total > 0 ? 100 * c.wrong / c.total : 0;
+                const ref_pct = r && r.total > 0 ? 100 * r.wrong / r.total : null;
+                return {
+                  cls: c.cls, cur_w: c.wrong, cur_t: c.total,
+                  cur_pct: Math.round(cur_pct * 10) / 10,
+                  ref_w: r?.wrong ?? null, ref_t: r?.total ?? null,
+                  ref_pct: ref_pct != null ? Math.round(ref_pct * 10) / 10 : null,
+                  delta_pct: ref_pct != null ? Math.round((cur_pct - ref_pct) * 10) / 10 : null,
+                };
+              });
+              if (perclassSort === "wrong") rows.sort((a, b) => b.cur_w - a.cur_w);
+              else if (perclassSort === "cls") rows.sort((a, b) => a.cls - b.cls);
+              else rows.sort((a, b) => (b.delta_pct ?? -999) - (a.delta_pct ?? -999));
+              return (
+                <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                    <SubHead>per-class (current · ref)</SubHead>
+                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      {refs.length > 0 && (
+                        <select
+                          value={activeRefName ?? ""}
+                          onChange={(e) => setSelectedRef(e.target.value)}
+                          style={{
+                            background: "#0f141b", color: "#bfe1ff", border: "1px solid #1f2937",
+                            borderRadius: 3, padding: "1px 3px", fontSize: 10, fontFamily: "inherit",
+                          }}
+                        >
+                          {refs.map(r => (
+                            <option key={r.name} value={r.name}>{r.label} ({r.acc}%)</option>
+                          ))}
+                        </select>
+                      )}
+                      <div style={{ display: "flex", gap: 2 }}>
+                        {(["wrong", "cls", "delta"] as const).map(s => (
+                          <button key={s}
+                            onClick={() => setPerclassSort(s)}
+                            style={{
+                              background: perclassSort === s ? "#1e3a5f" : "#0f141b",
+                              color: perclassSort === s ? "#bfe1ff" : "#888",
+                              border: "1px solid " + (perclassSort === s ? "#2d5a8a" : "#1f2937"),
+                              borderRadius: 3, padding: "1px 4px", fontSize: 9, fontFamily: "inherit", cursor: "pointer",
+                            }}
+                          >{s}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(70px, 1fr))", gap: 3 }}>
+                    {rows.map(r => {
+                      const curC = r.cur_pct > 50 ? "#f88" : r.cur_pct > 25 ? "#fb6" : r.cur_pct > 5 ? "#fc9" : "#9c9";
+                      const dC = r.delta_pct == null ? "#666"
+                        : r.delta_pct > 5 ? "#f88" : r.delta_pct > 0 ? "#fb6"
+                        : r.delta_pct < -5 ? "#6f9" : "#bfe1ff";
+                      return (
+                        <div key={r.cls} style={{
+                          background: "#0f141b", border: "1px solid #1f2937", borderRadius: 3,
+                          padding: "1px 4px", display: "flex", flexDirection: "column",
+                        }}>
+                          <span style={{ fontSize: 8.5, color: "#888" }}>cls {r.cls}</span>
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 3 }}>
+                            <span style={{ fontSize: 10.5, color: curC, fontWeight: 600 }}>{r.cur_pct}%</span>
+                            {r.ref_pct != null && (
+                              <>
+                                <span style={{ fontSize: 8.5, color: "#888" }}>{r.ref_pct}</span>
+                                <span style={{ fontSize: 8.5, color: dC, fontWeight: 600 }}>
+                                  {r.delta_pct! > 0 ? "+" : ""}{r.delta_pct}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </section>
         );
       })()}
