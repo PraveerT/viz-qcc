@@ -53,6 +53,10 @@ type Status = {
   } | null;
   misclass?: { cls: number; wrong: number; total: number; pct: number }[] | null;
   cnxxl_delta?: { ep: number; te: number; base_te: number; delta: number }[] | null;
+  refs?: {
+    current_best: number;
+    refs: { name: string; value: number; delta: number }[];
+  } | null;
 };
 
 const fmt = (n: number | null | undefined, d = 1) =>
@@ -359,6 +363,33 @@ export default function AnemonPage() {
                       <KV k="engram_max" v={eng.out_max.toFixed(4)} />
                     </>
                   )}
+                </div>
+              </div>
+            )}
+            {status?.refs && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #252525" }}>
+                <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>
+                  best so far vs reference runs
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 11 }}>
+                  <div style={{ background: "#0f141b", border: "1px solid #2d5a8a", borderRadius: 4, padding: "4px 8px", display: "flex", flexDirection: "column", minWidth: 80 }}>
+                    <span style={{ fontSize: 9, color: "#888" }}>current best</span>
+                    <span style={{ color: "#6f9", fontWeight: 700 }}>{status.refs.current_best.toFixed(2)}</span>
+                  </div>
+                  {status.refs.refs.map(r => {
+                    const dc = r.delta > 0.5 ? "#6f9" : r.delta > 0 ? "#bfe1ff" : r.delta < -1.5 ? "#f88" : "#fc9";
+                    return (
+                      <div key={r.name} style={{
+                        background: "#0f141b", border: "1px solid #1f2937", borderRadius: 4,
+                        padding: "4px 8px", display: "flex", flexDirection: "column", minWidth: 80,
+                      }}>
+                        <span style={{ fontSize: 9, color: "#888" }}>vs {r.name} ({r.value})</span>
+                        <span style={{ color: dc, fontWeight: 600 }}>
+                          {r.delta > 0 ? "+" : ""}{r.delta.toFixed(2)}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
