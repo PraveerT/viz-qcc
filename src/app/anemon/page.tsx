@@ -64,20 +64,41 @@ type Status = {
   }[] | null;
   current_perclass?: { cls: number; wrong: number; total: number }[] | null;
   fusion?: {
-    epoch?: number | null;
     ts?: string;
-    solo: { cur: number; cnxxl: number; dsn: number };
-    fusion: { cnxxl_cur: number; cnxxl_dsn: number; cnxxl_dsn_cur: number };
-    oracle: { cnxxl_cur: number; cnxxl_dsn: number; cnxxl_dsn_cur: number };
+    live?: "cnxxl" | "raw_c1" | null;
+    live_epoch?: number | null;
+    solo: {
+      cnxxl: number;
+      raw_c1: number;
+      dsn: number;
+      m?: number;
+    };
+    fusion: {
+      cnxxl_dsn: number;
+      cnxxl_raw: number;
+      cnxxl_dsn_raw: number;
+      cnxxl_dsn_raw_m?: number;
+    };
+    oracle: {
+      cnxxl_dsn: number;
+      cnxxl_raw: number;
+      cnxxl_dsn_raw: number;
+      cnxxl_dsn_raw_m?: number;
+    };
     history?: {
       epoch?: number | null;
       ts?: string;
-      cur: number;
-      cnxxl_cur: number;
-      cnxxl_dsn: number;
-      three_way: number;
-      orc_two: number;
-      orc_three: number;
+      live?: string | null;
+      cnxxl?: number | null;
+      raw_c1?: number | null;
+      dsn?: number | null;
+      m?: number | null;
+      cnxxl_dsn?: number | null;
+      cnxxl_raw?: number | null;
+      cnxxl_dsn_raw?: number | null;
+      cnxxl_dsn_raw_m?: number | null;
+      orc_cnxxl_dsn_raw?: number | null;
+      orc_cnxxl_dsn_raw_m?: number | null;
     }[];
   } | null;
 };
@@ -496,25 +517,34 @@ export default function AnemonPage() {
             {status?.fusion && (() => {
               const fu = status.fusion!;
               const hist = (fu.history ?? []).slice().reverse();
-              const bestRow = (fu.history ?? []).reduce<{ three_way: number } | null>(
-                (acc, r) => (acc == null || r.three_way > acc.three_way ? r : acc), null);
+              const best3 = (fu.history ?? []).reduce<number | null>(
+                (acc, r) => (r.cnxxl_dsn_raw != null && (acc == null || r.cnxxl_dsn_raw > acc) ? r.cnxxl_dsn_raw : acc), null);
+              const has4 = fu.fusion.cnxxl_dsn_raw_m != null;
+              const baseline3 = fu.fusion.cnxxl_dsn;
+              const liveBadge = fu.live ? `live: ${fu.live} ep ${fu.live_epoch ?? "?"}` : "no live run";
               return (
                 <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
-                  <SubHead>honest fusion @ ep {fu.epoch ?? "?"} (cnxxl 91.08 · dsn 90.25)</SubHead>
+                  <SubHead>honest fusion · {liveBadge}</SubHead>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))", gap: 4 }}>
-                    <MKV k="cur solo" v={`${fu.solo.cur}`} />
-                    <MKV k="cnxxl+cur" v={`${fu.fusion.cnxxl_cur}`} color={fu.fusion.cnxxl_cur > fu.solo.cnxxl ? "#6f9" : "#f88"} />
-                    <MKV k="cnxxl+dsn" v={`${fu.fusion.cnxxl_dsn}`} color="#6f9" />
-                    <MKV k="3-way" v={`${fu.fusion.cnxxl_dsn_cur}`} color={fu.fusion.cnxxl_dsn_cur > fu.fusion.cnxxl_dsn ? "#6f9" : "#fb6"} />
-                    <MKV k="orc 2w" v={`${fu.oracle.cnxxl_cur}`} color="#bfe1ff" />
-                    <MKV k="orc 3w" v={`${fu.oracle.cnxxl_dsn_cur}`} color="#bfe1ff" />
+                    <MKV k="cnxxl" v={`${fu.solo.cnxxl}`} color={fu.live === "cnxxl" ? "#6f9" : "#e8e8e8"} />
+                    <MKV k="raw_c1" v={`${fu.solo.raw_c1}`} color={fu.live === "raw_c1" ? "#6f9" : "#e8e8e8"} />
+                    <MKV k="dsn" v={`${fu.solo.dsn}`} />
+                    {fu.solo.m != null && <MKV k="m" v={`${fu.solo.m}`} />}
+                    <MKV k="c+dsn" v={`${fu.fusion.cnxxl_dsn}`} color="#9c9" />
+                    <MKV k="c+raw" v={`${fu.fusion.cnxxl_raw}`} color={fu.fusion.cnxxl_raw > fu.solo.cnxxl ? "#6f9" : "#f88"} />
+                    <MKV k="3-way" v={`${fu.fusion.cnxxl_dsn_raw}`} color={fu.fusion.cnxxl_dsn_raw > baseline3 ? "#6f9" : "#fb6"} />
+                    {has4 && <MKV k="4-way" v={`${fu.fusion.cnxxl_dsn_raw_m}`} color={fu.fusion.cnxxl_dsn_raw_m! > fu.fusion.cnxxl_dsn_raw ? "#6f9" : "#fb6"} />}
+                    <MKV k="orc 3w" v={`${fu.oracle.cnxxl_dsn_raw}`} color="#bfe1ff" />
+                    {has4 && <MKV k="orc 4w" v={`${fu.oracle.cnxxl_dsn_raw_m}`} color="#bfe1ff" />}
                   </div>
                   {hist.length > 0 && (
                     <div style={{ marginTop: 6, maxHeight: 240, overflowY: "auto" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5, tableLayout: "fixed" }}>
                         <thead>
                           <tr style={{ position: "sticky", top: 0, background: "#0a0a0a" }}>
-                            {["ep", "cur", "c+cur", "c+dsn", "3-way", "orc 3w"].map(h => (
+                            {(has4
+                              ? ["ep", "live", "cnxxl", "raw_c1", "c+dsn", "c+raw", "3-way", "4-way", "orc 4w"]
+                              : ["ep", "live", "cnxxl", "raw_c1", "c+dsn", "c+raw", "3-way", "orc 3w"]).map(h => (
                               <th key={h} style={{
                                 padding: "2px 4px", textAlign: "right",
                                 color: "#888", fontWeight: 500,
@@ -526,18 +556,26 @@ export default function AnemonPage() {
                         </thead>
                         <tbody>
                           {hist.map((r, i) => {
-                            const isBest = bestRow != null && r.three_way === bestRow.three_way;
+                            const isBest = best3 != null && r.cnxxl_dsn_raw === best3;
                             const cellPad = "2px 4px";
-                            const c2 = r.cnxxl_cur > fu.solo.cnxxl ? "#6f9" : r.cnxxl_cur < fu.solo.cnxxl ? "#f88" : "#e8e8e8";
-                            const c3 = r.three_way > fu.fusion.cnxxl_dsn ? "#6f9" : r.three_way < fu.fusion.cnxxl_dsn - 0.5 ? "#fb6" : "#e8e8e8";
+                            const c3 = r.cnxxl_dsn_raw != null && r.cnxxl_dsn_raw > baseline3 ? "#6f9"
+                              : r.cnxxl_dsn_raw != null && r.cnxxl_dsn_raw < baseline3 - 0.5 ? "#fb6" : "#e8e8e8";
+                            const tdR = (v: number | null | undefined, color = "#e8e8e8", bold = false) => (
+                              <td style={{ padding: cellPad, textAlign: "right", color, fontWeight: bold ? 700 : 500 }}>
+                                {v != null ? v.toFixed(2) : "—"}
+                              </td>
+                            );
                             return (
                               <tr key={`${r.epoch}-${i}`} style={{ background: isBest ? "#0c1a14" : undefined }}>
                                 <td style={{ padding: cellPad, textAlign: "right", color: "#bfe1ff", fontWeight: isBest ? 700 : 500 }}>{r.epoch ?? "—"}</td>
-                                <td style={{ padding: cellPad, textAlign: "right", color: "#e8e8e8" }}>{r.cur.toFixed(2)}</td>
-                                <td style={{ padding: cellPad, textAlign: "right", color: c2 }}>{r.cnxxl_cur.toFixed(2)}</td>
-                                <td style={{ padding: cellPad, textAlign: "right", color: "#9c9" }}>{r.cnxxl_dsn.toFixed(2)}</td>
-                                <td style={{ padding: cellPad, textAlign: "right", color: c3, fontWeight: isBest ? 700 : 500 }}>{r.three_way.toFixed(2)}</td>
-                                <td style={{ padding: cellPad, textAlign: "right", color: "#bfe1ff" }}>{r.orc_three.toFixed(2)}</td>
+                                <td style={{ padding: cellPad, textAlign: "right", color: "#888", fontSize: 9 }}>{r.live ?? "—"}</td>
+                                {tdR(r.cnxxl)}
+                                {tdR(r.raw_c1)}
+                                {tdR(r.cnxxl_dsn, "#9c9")}
+                                {tdR(r.cnxxl_raw)}
+                                {tdR(r.cnxxl_dsn_raw, c3, isBest)}
+                                {has4 && tdR(r.cnxxl_dsn_raw_m)}
+                                {tdR(has4 ? r.orc_cnxxl_dsn_raw_m : r.orc_cnxxl_dsn_raw, "#bfe1ff")}
                               </tr>
                             );
                           })}
