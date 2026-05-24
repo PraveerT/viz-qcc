@@ -69,6 +69,16 @@ type Status = {
     solo: { cur: number; cnxxl: number; dsn: number };
     fusion: { cnxxl_cur: number; cnxxl_dsn: number; cnxxl_dsn_cur: number };
     oracle: { cnxxl_cur: number; cnxxl_dsn: number; cnxxl_dsn_cur: number };
+    history?: {
+      epoch?: number | null;
+      ts?: string;
+      cur: number;
+      cnxxl_cur: number;
+      cnxxl_dsn: number;
+      three_way: number;
+      orc_two: number;
+      orc_three: number;
+    }[];
   } | null;
 };
 
@@ -483,21 +493,61 @@ export default function AnemonPage() {
                 </div>
               </div>
             )}
-            {status?.fusion && (
-              <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
-                <SubHead>honest fusion @ best ckpt {status.fusion.epoch != null ? `(ep ${status.fusion.epoch})` : ""}</SubHead>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))", gap: 4 }}>
-                  <MKV k="cur solo" v={`${status.fusion.solo.cur}`} />
-                  <MKV k="cnxxl" v={`${status.fusion.solo.cnxxl}`} />
-                  <MKV k="dsn" v={`${status.fusion.solo.dsn}`} />
-                  <MKV k="cnxxl+cur" v={`${status.fusion.fusion.cnxxl_cur}`} color={status.fusion.fusion.cnxxl_cur > status.fusion.solo.cnxxl ? "#6f9" : "#f88"} />
-                  <MKV k="cnxxl+dsn" v={`${status.fusion.fusion.cnxxl_dsn}`} color="#6f9" />
-                  <MKV k="3-way" v={`${status.fusion.fusion.cnxxl_dsn_cur}`} color={status.fusion.fusion.cnxxl_dsn_cur > status.fusion.fusion.cnxxl_dsn ? "#6f9" : "#fb6"} />
-                  <MKV k="orc 2w" v={`${status.fusion.oracle.cnxxl_cur}`} color="#bfe1ff" />
-                  <MKV k="orc 3w" v={`${status.fusion.oracle.cnxxl_dsn_cur}`} color="#bfe1ff" />
+            {status?.fusion && (() => {
+              const fu = status.fusion!;
+              const hist = (fu.history ?? []).slice().reverse();
+              const bestRow = (fu.history ?? []).reduce<{ three_way: number } | null>(
+                (acc, r) => (acc == null || r.three_way > acc.three_way ? r : acc), null);
+              return (
+                <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
+                  <SubHead>honest fusion @ ep {fu.epoch ?? "?"} (cnxxl 91.08 · dsn 90.25)</SubHead>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))", gap: 4 }}>
+                    <MKV k="cur solo" v={`${fu.solo.cur}`} />
+                    <MKV k="cnxxl+cur" v={`${fu.fusion.cnxxl_cur}`} color={fu.fusion.cnxxl_cur > fu.solo.cnxxl ? "#6f9" : "#f88"} />
+                    <MKV k="cnxxl+dsn" v={`${fu.fusion.cnxxl_dsn}`} color="#6f9" />
+                    <MKV k="3-way" v={`${fu.fusion.cnxxl_dsn_cur}`} color={fu.fusion.cnxxl_dsn_cur > fu.fusion.cnxxl_dsn ? "#6f9" : "#fb6"} />
+                    <MKV k="orc 2w" v={`${fu.oracle.cnxxl_cur}`} color="#bfe1ff" />
+                    <MKV k="orc 3w" v={`${fu.oracle.cnxxl_dsn_cur}`} color="#bfe1ff" />
+                  </div>
+                  {hist.length > 0 && (
+                    <div style={{ marginTop: 6, maxHeight: 240, overflowY: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5, tableLayout: "fixed" }}>
+                        <thead>
+                          <tr style={{ position: "sticky", top: 0, background: "#0a0a0a" }}>
+                            {["ep", "cur", "c+cur", "c+dsn", "3-way", "orc 3w"].map(h => (
+                              <th key={h} style={{
+                                padding: "2px 4px", textAlign: "right",
+                                color: "#888", fontWeight: 500,
+                                textTransform: "uppercase", letterSpacing: "0.3px",
+                                fontSize: 9, borderBottom: "1px solid #252525",
+                              }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {hist.map((r, i) => {
+                            const isBest = bestRow != null && r.three_way === bestRow.three_way;
+                            const cellPad = "2px 4px";
+                            const c2 = r.cnxxl_cur > fu.solo.cnxxl ? "#6f9" : r.cnxxl_cur < fu.solo.cnxxl ? "#f88" : "#e8e8e8";
+                            const c3 = r.three_way > fu.fusion.cnxxl_dsn ? "#6f9" : r.three_way < fu.fusion.cnxxl_dsn - 0.5 ? "#fb6" : "#e8e8e8";
+                            return (
+                              <tr key={`${r.epoch}-${i}`} style={{ background: isBest ? "#0c1a14" : undefined }}>
+                                <td style={{ padding: cellPad, textAlign: "right", color: "#bfe1ff", fontWeight: isBest ? 700 : 500 }}>{r.epoch ?? "—"}</td>
+                                <td style={{ padding: cellPad, textAlign: "right", color: "#e8e8e8" }}>{r.cur.toFixed(2)}</td>
+                                <td style={{ padding: cellPad, textAlign: "right", color: c2 }}>{r.cnxxl_cur.toFixed(2)}</td>
+                                <td style={{ padding: cellPad, textAlign: "right", color: "#9c9" }}>{r.cnxxl_dsn.toFixed(2)}</td>
+                                <td style={{ padding: cellPad, textAlign: "right", color: c3, fontWeight: isBest ? 700 : 500 }}>{r.three_way.toFixed(2)}</td>
+                                <td style={{ padding: cellPad, textAlign: "right", color: "#bfe1ff" }}>{r.orc_three.toFixed(2)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })()}
             {status?.current_perclass && status.current_perclass.length > 0 && (() => {
               const refs = status.available_refs ?? [];
               const cur = status.current_perclass!;
