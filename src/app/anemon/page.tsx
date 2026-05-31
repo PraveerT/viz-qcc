@@ -514,75 +514,24 @@ export default function AnemonPage() {
                 </div>
               </div>
             )}
-            {status?.fusion && (() => {
-              const fu = status.fusion!;
-              const hist = (fu.history ?? []).slice().reverse();
-              const best3 = (fu.history ?? []).reduce<number | null>(
-                (acc, r) => (r.cnxxl_dsn_raw != null && (acc == null || r.cnxxl_dsn_raw > acc) ? r.cnxxl_dsn_raw : acc), null);
-              const has4 = fu.fusion.cnxxl_dsn_raw_m != null;
-              const baseline3 = fu.fusion.cnxxl_dsn;
-              const liveBadge = fu.live ? `live: ${fu.live} ep ${fu.live_epoch ?? "?"}` : "no live run";
+            {(() => {
+              // No-DSN fusion (NVGesture test set = 482). Static offline evals.
+              const SOLO = [
+                { k: "cn", v: "91.29" },
+                { k: "qms", v: "91.29" },
+                { k: "fg", v: "83.61" },
+              ];
+              const BLEND = [
+                { k: "cn+fg", v: "91.91", best: false },
+                { k: "cn+qms+fg", v: "92.12", best: true },
+              ];
               return (
                 <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
-                  <SubHead>honest fusion · {liveBadge}</SubHead>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(72px, 1fr))", gap: 4 }}>
-                    <MKV k="cnxxl" v={`${fu.solo.cnxxl}`} color={fu.live === "cnxxl" ? "#6f9" : "#e8e8e8"} />
-                    <MKV k="raw_c1" v={`${fu.solo.raw_c1}`} color={fu.live === "raw_c1" ? "#6f9" : "#e8e8e8"} />
-                    <MKV k="dsn" v={`${fu.solo.dsn}`} />
-                    {fu.solo.m != null && <MKV k="m" v={`${fu.solo.m}`} />}
-                    <MKV k="c+dsn" v={`${fu.fusion.cnxxl_dsn}`} color="#9c9" />
-                    <MKV k="c+raw" v={`${fu.fusion.cnxxl_raw}`} color={fu.fusion.cnxxl_raw > fu.solo.cnxxl ? "#6f9" : "#f88"} />
-                    <MKV k="3-way" v={`${fu.fusion.cnxxl_dsn_raw}`} color={fu.fusion.cnxxl_dsn_raw > baseline3 ? "#6f9" : "#fb6"} />
-                    {has4 && <MKV k="4-way" v={`${fu.fusion.cnxxl_dsn_raw_m}`} color={fu.fusion.cnxxl_dsn_raw_m! > fu.fusion.cnxxl_dsn_raw ? "#6f9" : "#fb6"} />}
-                    <MKV k="orc 3w" v={`${fu.oracle.cnxxl_dsn_raw}`} color="#bfe1ff" />
-                    {has4 && <MKV k="orc 4w" v={`${fu.oracle.cnxxl_dsn_raw_m}`} color="#bfe1ff" />}
+                  <SubHead>fusion · no-dsn · test 482</SubHead>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(78px, 1fr))", gap: 4 }}>
+                    {SOLO.map((s) => <MKV key={s.k} k={s.k} v={`${s.v}%`} />)}
+                    {BLEND.map((b) => <MKV key={b.k} k={b.k} v={`${b.v}%`} color={b.best ? "#6f9" : "#9c9"} />)}
                   </div>
-                  {hist.length > 0 && (
-                    <div style={{ marginTop: 6, maxHeight: 240, overflowY: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5, tableLayout: "fixed" }}>
-                        <thead>
-                          <tr style={{ position: "sticky", top: 0, background: "#0a0a0a" }}>
-                            {(has4
-                              ? ["ep", "live", "cnxxl", "raw_c1", "c+dsn", "c+raw", "3-way", "4-way", "orc 4w"]
-                              : ["ep", "live", "cnxxl", "raw_c1", "c+dsn", "c+raw", "3-way", "orc 3w"]).map(h => (
-                              <th key={h} style={{
-                                padding: "2px 4px", textAlign: "right",
-                                color: "#888", fontWeight: 500,
-                                textTransform: "uppercase", letterSpacing: "0.3px",
-                                fontSize: 9, borderBottom: "1px solid #252525",
-                              }}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {hist.map((r, i) => {
-                            const isBest = best3 != null && r.cnxxl_dsn_raw === best3;
-                            const cellPad = "2px 4px";
-                            const c3 = r.cnxxl_dsn_raw != null && r.cnxxl_dsn_raw > baseline3 ? "#6f9"
-                              : r.cnxxl_dsn_raw != null && r.cnxxl_dsn_raw < baseline3 - 0.5 ? "#fb6" : "#e8e8e8";
-                            const tdR = (v: number | null | undefined, color = "#e8e8e8", bold = false) => (
-                              <td style={{ padding: cellPad, textAlign: "right", color, fontWeight: bold ? 700 : 500 }}>
-                                {v != null ? v.toFixed(2) : "—"}
-                              </td>
-                            );
-                            return (
-                              <tr key={`${r.epoch}-${i}`} style={{ background: isBest ? "#0c1a14" : undefined }}>
-                                <td style={{ padding: cellPad, textAlign: "right", color: "#bfe1ff", fontWeight: isBest ? 700 : 500 }}>{r.epoch ?? "—"}</td>
-                                <td style={{ padding: cellPad, textAlign: "right", color: "#888", fontSize: 9 }}>{r.live ?? "—"}</td>
-                                {tdR(r.cnxxl)}
-                                {tdR(r.raw_c1)}
-                                {tdR(r.cnxxl_dsn, "#9c9")}
-                                {tdR(r.cnxxl_raw)}
-                                {tdR(r.cnxxl_dsn_raw, c3, isBest)}
-                                {has4 && tdR(r.cnxxl_dsn_raw_m)}
-                                {tdR(has4 ? r.orc_cnxxl_dsn_raw_m : r.orc_cnxxl_dsn_raw, "#bfe1ff")}
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
                 </div>
               );
             })()}
