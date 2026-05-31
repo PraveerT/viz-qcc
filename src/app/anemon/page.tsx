@@ -525,6 +525,7 @@ export default function AnemonPage() {
                 { k: "cn+fg", v: "91.91", best: false },
                 { k: "cn+qms+fg", v: "92.12", best: true },
               ];
+              const nd = (status?.fusion as { nodsn?: { run: string; epoch: number | null; cn: number; live: number; fg?: number; cn_live: number; cn_live_fg?: number } })?.nodsn;
               return (
                 <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
                   <SubHead>fusion · no-dsn · test 482</SubHead>
@@ -532,6 +533,18 @@ export default function AnemonPage() {
                     {SOLO.map((s) => <MKV key={s.k} k={s.k} v={`${s.v}%`} />)}
                     {BLEND.map((b) => <MKV key={b.k} k={b.k} v={`${b.v}%`} color={b.best ? "#6f9" : "#9c9"} />)}
                   </div>
+                  {nd && (
+                    <>
+                      <div style={{ fontSize: 9, color: "#888", margin: "6px 0 3px", letterSpacing: "0.4px" }}>
+                        live · {nd.run}{nd.epoch != null ? ` · ep ${nd.epoch}` : ""}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(78px, 1fr))", gap: 4 }}>
+                        <MKV k="run" v={`${nd.live}%`} />
+                        <MKV k="cn+run" v={`${nd.cn_live}%`} color={nd.cn_live > 91.29 ? "#6f9" : "#9c9"} />
+                        {nd.cn_live_fg != null && <MKV k="cn+run+fg" v={`${nd.cn_live_fg}%`} color={nd.cn_live_fg > 91.91 ? "#6f9" : "#bfe1ff"} />}
+                      </div>
+                    </>
+                  )}
                 </div>
               );
             })()}
