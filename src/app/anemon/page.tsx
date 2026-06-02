@@ -12,8 +12,28 @@ type EpochRow = {
   tr_acc: number | null;
   tr_loss: number | null;
   aux_loss?: number | null;
+  aux_acc?: number | null;
+  aux_te?: number | null;
   te_p1: number | null;
   te_p5: number | null;
+};
+
+type SkewTrajRow = {
+  ep: number;
+  scale: number; wu: number; wv: number;
+  head0: number; headf: number; desc_e: number;
+  lag1: number; lag2: number;
+  aux_acc?: number | null; aux_te?: number | null;
+};
+
+type SkewStats = {
+  epoch: number;
+  scale: number;
+  wu?: number; wv?: number; head0?: number; headf?: number;
+  alive?: boolean;
+  comp_energy?: Record<string, number>;
+  rank_usage?: number[];
+  lag_energy?: number[];
 };
 
 type LBRow = Record<string, string>;
@@ -63,44 +83,8 @@ type Status = {
     perclass: { cls: number; wrong: number; total: number }[];
   }[] | null;
   current_perclass?: { cls: number; wrong: number; total: number }[] | null;
-  fusion?: {
-    ts?: string;
-    live?: "cnxxl" | "raw_c1" | null;
-    live_epoch?: number | null;
-    solo: {
-      cnxxl: number;
-      raw_c1: number;
-      dsn: number;
-      m?: number;
-    };
-    fusion: {
-      cnxxl_dsn: number;
-      cnxxl_raw: number;
-      cnxxl_dsn_raw: number;
-      cnxxl_dsn_raw_m?: number;
-    };
-    oracle: {
-      cnxxl_dsn: number;
-      cnxxl_raw: number;
-      cnxxl_dsn_raw: number;
-      cnxxl_dsn_raw_m?: number;
-    };
-    history?: {
-      epoch?: number | null;
-      ts?: string;
-      live?: string | null;
-      cnxxl?: number | null;
-      raw_c1?: number | null;
-      dsn?: number | null;
-      m?: number | null;
-      cnxxl_dsn?: number | null;
-      cnxxl_raw?: number | null;
-      cnxxl_dsn_raw?: number | null;
-      cnxxl_dsn_raw_m?: number | null;
-      orc_cnxxl_dsn_raw?: number | null;
-      orc_cnxxl_dsn_raw_m?: number | null;
-    }[];
-  } | null;
+  skew?: SkewStats | null;
+  skew_traj?: SkewTrajRow[] | null;
 };
 
 const REF_KEY = "anemon_ref_name";
@@ -514,36 +498,75 @@ export default function AnemonPage() {
                 </div>
               </div>
             )}
-            {(() => {
-              // No-DSN fusion (NVGesture test set = 482). Static offline evals.
-              const SOLO = [
-                { k: "cn", v: "91.29" },
-                { k: "qms", v: "91.29" },
-                { k: "fg", v: "83.61" },
-              ];
-              const BLEND = [
-                { k: "cn+fg", v: "91.91", best: false },
-                { k: "cn+qms+fg", v: "92.12", best: true },
-              ];
-              const nd = (status?.fusion as { nodsn?: { run: string; epoch: number | null; cn: number; live: number; fg?: number; cn_live: number; cn_live_fg?: number } })?.nodsn;
+            {status?.skew && (() => {
+              const sk = status.skew!;
+              const traj = status.skew_traj ?? [];
+              const lastT = traj.length ? traj[traj.length - 1] : null;
+              const spark = (key: keyof SkewTrajRow, color: string) => {
+                const vals = traj.map(t => t[key]).filter((v): v is number => v != null);
+                if (vals.length < 2) return null;
+                const mx = Math.max(...vals), mn = Math.min(...vals);
+                const pts = vals.map((v, i) =>
+                  `${(i / Math.max(1, vals.length - 1)) * 100},${30 - ((v - mn) / (mx - mn || 1)) * 28}`).join(" ");
+                return (
+                  <svg viewBox="0 0 100 30" preserveAspectRatio="none" style={{ width: "100%", height: 26 }}>
+                    <polyline points={pts} fill="none" stroke={color} strokeWidth={1.4} />
+                  </svg>
+                );
+              };
+              const accColor = (v?: number | null) => v == null ? "#666" : v > 30 ? "#6f9" : v > 10 ? "#fb6" : "#f88";
               return (
                 <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #252525" }}>
-                  <SubHead>fusion · no-dsn · test 482</SubHead>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(78px, 1fr))", gap: 4 }}>
-                    {SOLO.map((s) => <MKV key={s.k} k={s.k} v={`${s.v}%`} />)}
-                    {BLEND.map((b) => <MKV key={b.k} k={b.k} v={`${b.v}%`} color={b.best ? "#6f9" : "#9c9"} />)}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <SubHead>skew-tcc aux · ep {sk.epoch}</SubHead>
+                    <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.5px", color: sk.alive ? "#6f9" : "#f88" }}>
+                      {sk.alive ? "● ALIVE" : "○ DEAD (decayed)"}
+                    </span>
                   </div>
-                  {nd && (
-                    <>
-                      <div style={{ fontSize: 9, color: "#888", margin: "6px 0 3px", letterSpacing: "0.4px" }}>
-                        live · {nd.run}{nd.epoch != null ? ` · ep ${nd.epoch}` : ""}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(56px, 1fr))", gap: 6 }}>
+                    <MKV k="scale" v={fmt(sk.scale, 3)} color={Math.abs(sk.scale) > 0.01 ? "#6bf" : "#f88"} />
+                    <MKV k="head0" v={sk.head0 != null ? fmt(sk.head0, 3) : "—"} color={(sk.head0 ?? 0) > 0.05 ? "#6bf" : "#f88"} />
+                    <MKV k="wu" v={sk.wu != null ? fmt(sk.wu, 3) : "—"} />
+                    <MKV k="wv" v={sk.wv != null ? fmt(sk.wv, 3) : "—"} />
+                    <MKV k="headf" v={sk.headf != null ? fmt(sk.headf, 3) : "—"} />
+                    {lastT && <MKV k="aux tr%" v={lastT.aux_acc != null ? fmt(lastT.aux_acc, 1) : "—"} color={accColor(lastT.aux_acc)} />}
+                    {lastT && <MKV k="aux te%" v={lastT.aux_te != null ? fmt(lastT.aux_te, 1) : "—"} color={accColor(lastT.aux_te)} />}
+                    {sk.lag_energy && sk.lag_energy.map((v, i) => <MKV key={i} k={`lag${i + 1}`} v={fmt(v, 2)} />)}
+                  </div>
+                  {sk.comp_energy && (
+                    <div style={{ marginTop: 6 }}>
+                      <SubHead>projector energy by cov component %</SubHead>
+                      <div style={{ display: "flex", gap: 3, alignItems: "flex-end", height: 34 }}>
+                        {Object.entries(sk.comp_energy).map(([k, v]) => (
+                          <div key={k} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                            <div style={{ fontSize: 8, color: "#888" }}>{v}</div>
+                            <div style={{ width: "100%", background: k[0] === k[1] ? "#6bf" : "#fb6", height: `${Math.max(2, v * 0.35)}px`, borderRadius: 2 }} />
+                            <div style={{ fontSize: 7.5, color: "#666" }}>{k}</div>
+                          </div>
+                        ))}
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(78px, 1fr))", gap: 4 }}>
-                        <MKV k="run" v={`${nd.live}%`} />
-                        <MKV k="cn+run" v={`${nd.cn_live}%`} color={nd.cn_live > 91.29 ? "#6f9" : "#9c9"} />
-                        {nd.cn_live_fg != null && <MKV k="cn+run+fg" v={`${nd.cn_live_fg}%`} color={nd.cn_live_fg > 91.91 ? "#6f9" : "#bfe1ff"} />}
+                    </div>
+                  )}
+                  {sk.rank_usage && sk.rank_usage.length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <SubHead>per-rank usage % (r={sk.rank_usage.length})</SubHead>
+                      <div style={{ display: "flex", gap: 2, alignItems: "flex-end", height: 26 }}>
+                        {sk.rank_usage.map((v, i) => (
+                          <div key={i} title={`r${i}: ${v}%`} style={{ flex: 1, background: v > 12 ? "#6bf" : v > 4 ? "#9c9" : "#3a4252", height: `${Math.max(2, v * 1.4)}px`, borderRadius: 1 }} />
+                        ))}
                       </div>
-                    </>
+                    </div>
+                  )}
+                  {traj.length > 1 && (
+                    <div style={{ marginTop: 6 }}>
+                      <SubHead>trajectory over epochs (does the aux survive?)</SubHead>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <div><div style={{ fontSize: 8, color: "#6bf" }}>scale</div>{spark("scale", "#6bf")}</div>
+                        <div><div style={{ fontSize: 8, color: "#fb6" }}>head0 (norm)</div>{spark("head0", "#fb6")}</div>
+                        <div><div style={{ fontSize: 8, color: "#9c9" }}>desc energy</div>{spark("desc_e", "#9c9")}</div>
+                        <div><div style={{ fontSize: 8, color: "#6f9" }}>aux test %</div>{spark("aux_te", "#6f9")}</div>
+                      </div>
+                    </div>
                   )}
                 </div>
               );
@@ -701,13 +724,6 @@ export default function AnemonPage() {
           );
         })()}
       </section>
-
-      {status?.leaderboard?.["Top combo per fusion width (with DSN)"]?.[0] && (
-        <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
-          <div style={{ fontSize: 9, color: "#888", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 6 }}>top by fusion width</div>
-          <CompactTable rows={status.leaderboard["Top combo per fusion width (with DSN)"][0]} />
-        </section>
-      )}
 
       {status?.engram && (
         <section style={{ padding: "8px 16px", borderTop: "1px solid #252525", flexShrink: 0 }}>
